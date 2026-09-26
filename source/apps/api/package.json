@@ -1,0 +1,38 @@
+{
+  "name": "@bcis/api",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "db:check": "drizzle-kit check --config drizzle.config.ts",
+    "db:generate": "drizzle-kit generate --config drizzle.config.ts",
+    "dev": "tsx watch src/server.ts",
+    "samples:reports": "tsx src/scripts/generate-report-samples.ts",
+    "start": "node dist/server.js",
+    "test": "vitest run --maxWorkers=1 --testTimeout=15000 --hookTimeout=15000",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@bcis/shared": "workspace:*",
+    "@fastify/cors": "^11.1.0",
+    "@fastify/rate-limit": "^11.2.0",
+    "@node-rs/argon2": "^2.2.1",
+    "dotenv": "^17.2.3",
+    "drizzle-orm": "^0.45.3",
+    "exceljs": "^4.4.0",
+    "fastify": "^5.12.5",
+    "pdfmake": "^0.3.11",
+    "pg": "^8.16.3",
+    "zod": "^4.1.12"
+  },
+  "devDependencies": {
+    "@types/node": "^24.10.0",
+    "@types/pdfmake": "^0.3.3",
+    "@types/pg": "^8.15.6",
+    "drizzle-kit": "^0.31.6",
+    "tsx": "^4.20.6",
+    "typescript": "^7.0.2",
+    "vitest": "^5.0.1"
+  }
+}

@@ -1,0 +1,2 @@
+ALTER TABLE "collection_batch_accounts" DROP CONSTRAINT "collection_batch_accounts_amounts_chk";--> statement-breakpoint
+ALTER TABLE "collection_batch_accounts" ADD CONSTRAINT "collection_batch_accounts_amounts_chk" CHECK ("collection_batch_accounts"."expected_centavos" >= 0 and "collection_batch_accounts"."collected_centavos" >= 0 and "collection_batch_accounts"."collected_centavos" <= "collection_batch_accounts"."expected_centavos");

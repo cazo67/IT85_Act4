@@ -1,0 +1,24 @@
+{
+  "name": "bcis-workspace",
+  "version": "0.1.0",
+  "private": true,
+  "packageManager": "pnpm@10.34.3",
+  "engines": {
+    "node": ">=22 <25"
+  },
+  "scripts": {
+    "build": "corepack pnpm -r --if-present build",
+    "check": "corepack pnpm typecheck && corepack pnpm test && corepack pnpm build",
+    "dev:api": "corepack pnpm --filter @bcis/api dev",
+    "dev:desktop": "corepack pnpm --filter @bcis/desktop dev",
+    "db:seed-security": "corepack pnpm --filter @bcis/database-tools seed:security",
+    "db:seed-master-data": "corepack pnpm --filter @bcis/database-tools seed:master-data",
+    "test": "corepack pnpm -r --if-present test",
+    "typecheck": "corepack pnpm -r --if-present typecheck"
+  },
+  "devDependencies": {
+    "@types/node": "^24.10.0",
+    "typescript": "^7.0.2",
+    "vitest": "^5.0.1"
+  }
+}

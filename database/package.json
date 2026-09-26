@@ -1,0 +1,24 @@
+{
+  "name": "@bcis/database-tools",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "seed:security": "tsx seeds/01-security.ts",
+    "seed:master-data": "tsx seeds/02-master-data.ts",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@bcis/shared": "workspace:*",
+    "@node-rs/argon2": "^2.2.1",
+    "dotenv": "^17.2.3",
+    "drizzle-orm": "^0.45.3",
+    "pg": "^8.16.3"
+  },
+  "devDependencies": {
+    "@types/node": "^24.10.0",
+    "@types/pg": "^8.15.6",
+    "tsx": "^4.20.6",
+    "typescript": "^7.0.2"
+  }
+}

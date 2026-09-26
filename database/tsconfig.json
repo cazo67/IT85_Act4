@@ -1,0 +1,11 @@
+{
+  "extends": "../source/tsconfig.base.json",
+  "compilerOptions": {
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "types": ["node"],
+    "noEmit": true
+  },
+  "include": ["seeds/**/*.ts"]
+}
+

@@ -1,0 +1,8 @@
+packages:
+  - apps/*
+  - packages/*
+  - ../database
+
+onlyBuiltDependencies:
+  - electron
+  - esbuild

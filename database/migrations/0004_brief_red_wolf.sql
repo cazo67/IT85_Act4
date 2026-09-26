@@ -1,0 +1,4 @@
+ALTER TABLE "invoice_items" DROP CONSTRAINT "invoice_items_values_chk";--> statement-breakpoint
+ALTER TABLE "invoices" DROP CONSTRAINT "invoices_amounts_chk";--> statement-breakpoint
+ALTER TABLE "invoice_items" ADD CONSTRAINT "invoice_items_values_chk" CHECK ("invoice_items"."quantity" > 0 and "invoice_items"."unit_amount_centavos" > 0 and "invoice_items"."total_centavos" = "invoice_items"."quantity" * "invoice_items"."unit_amount_centavos");--> statement-breakpoint
+ALTER TABLE "invoices" ADD CONSTRAINT "invoices_amounts_chk" CHECK ("invoices"."subtotal_centavos" > 0 and "invoices"."total_centavos" > 0 and "invoices"."total_centavos" = "invoices"."subtotal_centavos");

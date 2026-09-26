@@ -1,0 +1,27 @@
+node_modules/
+.pnpm-store/
+dist/
+out/
+coverage/
+*.log
+*.local
+.env
+.env.*
+!.env.example
+source/apps/*/.env
+source/apps/*/.env.*
+!source/apps/*/.env.example
+# Runtime data only. Keep source folders named attachments/backups trackable.
+/runtime/attachments/
+/runtime/backups/
+/source/apps/api/attachments/
+/source/apps/api/backups/
+release/*
+!release/.gitkeep
+tests/screenshots/*
+!tests/screenshots/.gitkeep
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+
