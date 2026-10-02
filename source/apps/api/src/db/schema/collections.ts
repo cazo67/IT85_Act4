@@ -5,7 +5,7 @@ import { payments } from "./payments.js";
 import { users } from "./security.js";
 import { collectionRoutes, collectors, serviceAccounts, subscribers } from "./subscribers.js";
 
-export const collectionBatchStatus = pgEnum("collection_batch_status", ["DRAFT", "ACTIVE", "SUBMITTED", "RECONCILED", "CLOSED"]);
+export const collectionBatchStatus = pgEnum("collection_batch_status", ["DRAFT", "ACTIVE", "SUBMITTED", "RECONCILED", "CLOSED", "REMITTED"]);
 export const batchAccountStatus = pgEnum("batch_account_status", ["PENDING", "PARTIAL", "COLLECTED"]);
 
 export const collectionBatches = pgTable("collection_batches", {
@@ -43,6 +43,9 @@ export const collectionBatchAccounts = pgTable("collection_batch_accounts", {
   accountNumberSnapshot: text("account_number_snapshot").notNull(),
   subscriberNameSnapshot: text("subscriber_name_snapshot").notNull(),
   serviceNumberSnapshot: text("service_number_snapshot").notNull(),
+  addressSnapshot: text("address_snapshot"),
+  currentBillCentavosSnapshot: bigint("current_bill_centavos_snapshot", { mode: "bigint" }),
+  arrearsCentavosSnapshot: bigint("arrears_centavos_snapshot", { mode: "bigint" }),
   expectedCentavos: bigint("expected_centavos", { mode: "bigint" }).notNull(),
   collectedCentavos: bigint("collected_centavos", { mode: "bigint" }).notNull().default(sql`0`),
   status: batchAccountStatus("status").notNull().default("PENDING"),
@@ -50,7 +53,8 @@ export const collectionBatchAccounts = pgTable("collection_batch_accounts", {
 }, (table) => [
   uniqueIndex("collection_batch_accounts_service_uidx").on(table.batchId, table.serviceAccountId),
   index("collection_batch_accounts_subscriber_idx").on(table.batchId, table.subscriberId),
-  check("collection_batch_accounts_amounts_chk", sql`${table.expectedCentavos} >= 0 and ${table.collectedCentavos} >= 0 and ${table.collectedCentavos} <= ${table.expectedCentavos}`)
+  check("collection_batch_accounts_amounts_chk", sql`${table.expectedCentavos} >= 0 and ${table.collectedCentavos} >= 0 and ${table.collectedCentavos} <= ${table.expectedCentavos}`),
+  check("collection_batch_accounts_route_snapshot_chk", sql`(${table.addressSnapshot} is null and ${table.currentBillCentavosSnapshot} is null and ${table.arrearsCentavosSnapshot} is null) or (${table.addressSnapshot} is not null and ${table.currentBillCentavosSnapshot} >= 0 and ${table.arrearsCentavosSnapshot} >= 0 and ${table.currentBillCentavosSnapshot} + ${table.arrearsCentavosSnapshot} = ${table.expectedCentavos})`)
 ]);
 
 export const batchCollectionEntries = pgTable("batch_collection_entries", {

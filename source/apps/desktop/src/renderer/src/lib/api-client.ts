@@ -60,16 +60,26 @@ export interface ServicePlan {
 
 export interface SubscriberProfileData {
   subscriber: SubscriberListItem & Record<string, unknown>;
-  addresses: Array<Record<string, unknown>>;
-  contacts: Array<Record<string, unknown>>;
-  services: Array<{ account: Record<string, unknown>; planName: string; planCode: string }>;
+  addresses: Array<{ id: string; type: "BILLING" | "SERVICE" | "MAILING" | "OTHER"; label: string; line1: string; line2: string | null; barangay: string; cityMunicipality: string; province: string; postalCode: string | null; isPrimary: boolean; isActive: boolean }>;
+  contacts: Array<{ id: string; type: "MOBILE" | "PHONE" | "EMAIL" | "OTHER"; value: string; isPrimary: boolean; isActive: boolean }>;
+  services: Array<{ account: { id: string; serviceAccountNumber: string; planId: string; installationAddressId: string; currentRateCentavos: string; status: "PENDING" | "ACTIVE" | "SUSPENDED" | "DISCONNECTED" | "TERMINATED"; version: number }; planName: string; planCode: string }>;
   serviceHistory: Array<Record<string, unknown>>;
 }
 
 export interface CollectionSetup {
-  areas: Array<{ id: string; code: string; name: string }>;
-  routes: Array<{ id: string; areaId: string; code: string; name: string }>;
-  collectors: Array<{ id: string; code: string; displayName: string; contactNumber: string | null }>;
+  areas: Array<{ id: string; code: string; name: string; isActive: boolean }>;
+  routes: Array<{ id: string; areaId: string; code: string; name: string; isActive: boolean }>;
+  collectors: Array<{ id: string; code: string; displayName: string; contactNumber: string | null; isActive: boolean }>;
+}
+
+export interface CollectorAssignmentHistoryItem {
+  id: string;
+  collectorId: string;
+  collectorName: string;
+  routeId: string | null;
+  routeName: string | null;
+  effectiveFrom: string;
+  effectiveTo: string | null;
 }
 
 export interface BillingPreview {
@@ -89,8 +99,20 @@ export interface InvoiceListItem {
   invoiceDate: string;
   dueDate: string;
   status: string;
+  subtotalCentavos: string;
   totalCentavos: string;
+  paidCentavos: string;
+  outstandingCentavos: string;
   planNameSnapshot: string;
+  planCodeSnapshot: string;
+  subscriberAccountNumber: string;
+  subscriberName: string;
+  serviceAccountNumber: string;
+}
+
+export interface InvoiceDetail {
+  invoice: InvoiceListItem;
+  items: Array<{ id: string; type: "PLAN_SERVICE" | "ADJUSTMENT"; description: string; quantity: number; unitAmountCentavos: string; totalCentavos: string }>;
 }
 
 export interface PaymentPreview {
@@ -114,7 +136,7 @@ export interface CollectionBatch {
   collectorId: string;
   routeId: string;
   collectionDate: string;
-  status: "DRAFT" | "ACTIVE" | "SUBMITTED" | "RECONCILED" | "CLOSED";
+  status: "DRAFT" | "ACTIVE" | "SUBMITTED" | "REMITTED" | "RECONCILED" | "CLOSED";
   expectedCashCentavos: string;
   collectedCashCentavos: string;
   nonCashCentavos: string;
@@ -125,7 +147,8 @@ export interface CollectionBatch {
 
 export interface CollectionBatchDetail {
   batch: CollectionBatch;
-  accounts: Array<{ id: string; accountNumberSnapshot: string; subscriberNameSnapshot: string; serviceNumberSnapshot: string; expectedCentavos: string; collectedCentavos: string; status: string }>;
+  summary: { accountCount: number; pendingCount: number; partialCount: number; collectedCount: number; uncollectedCentavos: string; totalsMatch: boolean };
+  accounts: Array<{ id: string; accountNumberSnapshot: string; subscriberNameSnapshot: string; serviceNumberSnapshot: string; addressSnapshot: string | null; currentBillCentavosSnapshot: string | null; arrearsCentavosSnapshot: string | null; expectedCentavos: string; collectedCentavos: string; status: string }>;
   entries: Array<{ id: string; amountCentavos: string }>;
   remittance: null | { remittanceNumber: string; remittedCashCentavos: string; differenceCentavos: string; notes: string };
   reconciliation: null | { differenceCentavos: string; notes: string };
@@ -145,7 +168,49 @@ export interface ReceivableItem {
   serviceAccountId: string;
   serviceAccountNumber: string;
   serviceStatus: string;
+  planCode: string;
+  planName: string;
+  serviceTypeCode: string;
+  serviceTypeName: string;
+  areaName: string | null;
+  collectorName: string | null;
   daysPastDue: number;
+  ageBucket: "CURRENT" | "DAYS_1_30" | "DAYS_31_60" | "DAYS_61_90" | "DAYS_91_PLUS";
+  lastPaymentAt: string | null;
+}
+
+export interface ReceivableFilters {
+  search?: string;
+  bucket?: ReceivableItem["ageBucket"];
+  areaId?: string;
+  collectorId?: string;
+  planId?: string;
+  serviceTypeId?: string;
+}
+
+export interface OverdueAccountItem {
+  subscriberId: string;
+  accountNumber: string;
+  subscriberName: string;
+  serviceAccountId: string;
+  serviceAccountNumber: string;
+  serviceStatus: string;
+  areaName: string | null;
+  collectorName: string | null;
+  monthsUnpaid: number;
+  overdueInvoiceCount: number;
+  oldestUnpaidInvoice: string;
+  oldestDueDate: string;
+  maximumDaysPastDue: number;
+  totalArrearsCentavos: string;
+  lastPaymentAt: string | null;
+}
+
+export interface ReceivableFilterOptions {
+  areas: Array<{ id: string; name: string }>;
+  collectors: Array<{ id: string; name: string }>;
+  plans: Array<{ id: string; name: string; code: string }>;
+  serviceTypes: Array<{ id: string; name: string; code: string }>;
 }
 
 export interface AgingSummary {
@@ -200,6 +265,11 @@ export interface DashboardData {
   suspendedServiceCount: number;
   openBatchCount: number;
   aging: AgingSummary;
+  paymentMethods: Array<{ method: "CASH" | "GCASH"; amountCentavos: string; paymentCount: number }>;
+  collectorPerformance: Array<{ collectorId: string; collectorName: string; batchCount: number; expectedCentavos: string; collectedCentavos: string; remittedCentavos: string }>;
+  overdueAlerts: Array<{ subscriberId: string; accountNumber: string; subscriberName: string; serviceAccountNumber: string; oldestDueDate: string; maximumDaysPastDue: number; totalArrearsCentavos: string }>;
+  hasMoreOverdue: boolean;
+  recentPayments: Array<{ paymentNumber: string; paidAt: string; method: "CASH" | "GCASH"; amountCentavos: string; accountNumber: string; subscriberName: string }>;
 }
 
 export interface ReportDocument {
@@ -240,6 +310,16 @@ export class ApiError extends Error {
   constructor(public readonly code: string, message: string, public readonly status: number) {
     super(message);
   }
+}
+
+let sessionFailureHandler: ((token: string, error: ApiError) => void) | null = null;
+
+export function setSessionFailureHandler(handler: ((token: string, error: ApiError) => void) | null): void {
+  sessionFailureHandler = handler;
+}
+
+export function getCurrentUser(token: string): Promise<AuthenticatedUser> {
+  return request<AuthenticatedUser>("/api/v1/auth/me", { method: "GET" }, token);
 }
 
 export async function login(username: string, password: string): Promise<LoginResult> {
@@ -302,6 +382,38 @@ export function getSubscriber(token: string, id: string): Promise<SubscriberProf
   return request(`/api/v1/subscribers/${id}`, { method: "GET" }, token);
 }
 
+export function updateSubscriberIdentity(token: string, id: string, input: { firstName: string; middleName: string; lastName: string; suffix: string; version: number }): Promise<void> {
+  return request(`/api/v1/subscribers/${id}/identity`, jsonRequest("PATCH", input), token);
+}
+
+export function updateSubscriberStatus(token: string, id: string, input: { status: "INACTIVE"; billingDay: number; dueDay: number; notes: string; version: number; collectionAreaId?: string; assignedCollectorId?: string }): Promise<void> {
+  return request(`/api/v1/subscribers/${id}`, jsonRequest("PATCH", input), token);
+}
+
+export function addSubscriberContact(token: string, id: string, input: { type: "MOBILE" | "PHONE" | "EMAIL" | "OTHER"; value: string; isPrimary: boolean; version: number }): Promise<{ id: string }> {
+  return request(`/api/v1/subscribers/${id}/contacts`, jsonRequest("POST", input), token);
+}
+
+export function replaceSubscriberContact(token: string, id: string, contactId: string, input: { type: "MOBILE" | "PHONE" | "EMAIL" | "OTHER"; value: string; isPrimary: boolean; version: number }): Promise<{ id: string }> {
+  return request(`/api/v1/subscribers/${id}/contacts/${contactId}`, jsonRequest("PUT", input), token);
+}
+
+export function deactivateSubscriberContact(token: string, id: string, contactId: string, version: number): Promise<void> {
+  return request(`/api/v1/subscribers/${id}/contacts/${contactId}/active`, jsonRequest("PATCH", { version }), token);
+}
+
+export function addSubscriberAddress(token: string, id: string, input: { type: "BILLING" | "SERVICE" | "MAILING" | "OTHER"; label?: string; line1: string; line2?: string; barangay: string; cityMunicipality: string; province: string; postalCode?: string; isPrimary: boolean; version: number }): Promise<{ id: string }> {
+  return request(`/api/v1/subscribers/${id}/addresses`, jsonRequest("POST", input), token);
+}
+
+export function replaceSubscriberAddress(token: string, id: string, addressId: string, input: { type: "BILLING" | "SERVICE" | "MAILING" | "OTHER"; label?: string; line1: string; line2?: string; barangay: string; cityMunicipality: string; province: string; postalCode?: string; isPrimary: boolean; version: number }): Promise<{ id: string }> {
+  return request(`/api/v1/subscribers/${id}/addresses/${addressId}`, jsonRequest("PUT", input), token);
+}
+
+export function deactivateSubscriberAddress(token: string, id: string, addressId: string, version: number): Promise<void> {
+  return request(`/api/v1/subscribers/${id}/addresses/${addressId}/active`, jsonRequest("PATCH", { version }), token);
+}
+
 export function listPlans(token: string, includeInactive = false): Promise<Array<{ plan: ServicePlan; serviceTypeCode: string; serviceTypeName: string }>> {
   return request(`/api/v1/plans?includeInactive=${includeInactive}`, { method: "GET" }, token);
 }
@@ -314,12 +426,20 @@ export function createPlan(token: string, input: unknown): Promise<ServicePlan> 
   return request("/api/v1/plans", jsonRequest("POST", input), token);
 }
 
-export function setPlanActive(token: string, planId: string, isActive: boolean): Promise<void> {
-  return request(`/api/v1/plans/${planId}/active`, jsonRequest("PATCH", { isActive }), token);
+export function updatePlan(token: string, planId: string, input: { name: string; description: string; priceCentavos: string; installationFeeCentavos: string; reconnectionFeeCentavos: string; version: number }): Promise<ServicePlan> {
+  return request(`/api/v1/plans/${planId}`, jsonRequest("PUT", input), token);
+}
+
+export function setPlanActive(token: string, planId: string, isActive: boolean, version?: number): Promise<void> {
+  return request(`/api/v1/plans/${planId}/active`, jsonRequest("PATCH", { isActive, version }), token);
 }
 
 export function createServiceAccount(token: string, input: unknown): Promise<Record<string, unknown>> {
   return request("/api/v1/service-accounts", jsonRequest("POST", input), token);
+}
+
+export function updateServiceAccountDetails(token: string, id: string, input: { planId: string; installationAddressId: string; status: "PENDING" | "ACTIVE" | "SUSPENDED" | "DISCONNECTED" | "TERMINATED"; reason: string; version: number }): Promise<void> {
+  return request(`/api/v1/service-accounts/${id}`, jsonRequest("PATCH", input), token);
 }
 
 export function getCollectionSetup(token: string): Promise<CollectionSetup> {
@@ -342,6 +462,10 @@ export function assignCollector(token: string, input: unknown) {
   return request("/api/v1/collector-assignments", jsonRequest("POST", input), token);
 }
 
+export function listCollectorAssignments(token: string, serviceAccountId: string): Promise<CollectorAssignmentHistoryItem[]> {
+  return request(`/api/v1/service-accounts/${serviceAccountId}/collector-assignments`, { method: "GET" }, token);
+}
+
 export function getBillingPreview(token: string, periodKey: string): Promise<BillingPreview> {
   return request(`/api/v1/billing/preview?periodKey=${encodeURIComponent(periodKey)}`, { method: "GET" }, token);
 }
@@ -350,13 +474,35 @@ export function finalizeBilling(token: string, periodKey: string, commandKey: st
   return request("/api/v1/billing/finalize", jsonRequest("POST", { periodKey, commandKey }), token);
 }
 
-export function listInvoices(token: string, periodKey = "", page = 1): Promise<{ items: InvoiceListItem[]; page: number; pageSize: number; hasMore: boolean }> {
+export function listInvoices(token: string, periodKey = "", page = 1, invoiceNumber = ""): Promise<{ items: InvoiceListItem[]; page: number; pageSize: number; hasMore: boolean }> {
   const period = periodKey ? `&periodKey=${encodeURIComponent(periodKey)}` : "";
-  return request(`/api/v1/invoices?page=${page}&pageSize=50${period}`, { method: "GET" }, token);
+  const search = invoiceNumber ? `&invoiceNumber=${encodeURIComponent(invoiceNumber)}` : "";
+  return request(`/api/v1/invoices?page=${page}&pageSize=50${period}${search}`, { method: "GET" }, token);
+}
+
+export function getInvoice(token: string, invoiceId: string): Promise<InvoiceDetail> {
+  return request(`/api/v1/invoices/${invoiceId}`, { method: "GET" }, token);
 }
 
 export function getStatement(token: string, subscriberId: string): Promise<{ entries: Array<Record<string, unknown>>; closingBalanceCentavos: string }> {
   return request(`/api/v1/subscribers/${subscriberId}/statement`, { method: "GET" }, token);
+}
+
+export interface LedgerPage {
+  subscriber: { id: string; accountNumber: string; firstName: string; lastName: string };
+  entries: Array<{ id: string; sequenceNumber: string; type: string; description: string; occurredAt: string; invoiceId: string | null; paymentId: string | null; debitCentavos: string; creditCentavos: string; balanceCentavos: string }>;
+  dateFrom: string | null;
+  dateTo: string | null;
+  openingBalanceCentavos: string;
+  pageOpeningBalanceCentavos: string;
+  closingBalanceCentavos: string;
+  page: number;
+  pageSize: number;
+  hasMore: boolean;
+}
+
+export function getLedger(token: string, subscriberId: string, page = 1, dateFrom?: string, dateTo?: string): Promise<LedgerPage> {
+  return request(`/api/v1/subscribers/${subscriberId}/ledger?${new URLSearchParams({ page: String(page), pageSize: "50", ...(dateFrom && dateTo ? { dateFrom, dateTo } : {}) })}`, { method: "GET" }, token);
 }
 
 export function getPaymentPreview(token: string, subscriberId: string, amountCentavos: string): Promise<PaymentPreview> {
@@ -367,8 +513,12 @@ export function postPayment(token: string, input: { subscriberId: string; amount
   return request("/api/v1/payments", jsonRequest("POST", input), token);
 }
 
-export function listPayments(token: string, page = 1): Promise<{ items: Array<{ payment: PaymentResult["payment"]; receiptNumber: string | null }>; page: number; pageSize: number; hasMore: boolean }> {
-  return request(`/api/v1/payments?page=${page}&pageSize=50`, { method: "GET" }, token);
+export function listPayments(token: string, page = 1, subscriberId?: string): Promise<{ items: Array<{ payment: PaymentResult["payment"]; receiptNumber: string | null }>; page: number; pageSize: number; hasMore: boolean }> {
+  return request(`/api/v1/payments?${new URLSearchParams({ page: String(page), pageSize: "50", ...(subscriberId ? { subscriberId } : {}) })}`, { method: "GET" }, token);
+}
+
+export function getPayment(token: string, paymentId: string): Promise<PaymentResult> {
+  return request(`/api/v1/payments/${paymentId}`, { method: "GET" }, token);
 }
 
 export function reversePayment(token: string, paymentId: string, reason: string) {
@@ -403,8 +553,16 @@ export function reconcileCollectionBatch(token: string, batchId: string, notes: 
   return request(`/api/v1/collection-batches/${batchId}/reconcile`, jsonRequest("POST", { notes, version }), token);
 }
 
-export function listReceivables(token: string, asOf: string, overdueOnly: boolean): Promise<{ items: ReceivableItem[]; page: number; pageSize: number; hasMore: boolean }> {
-  return request(`/api/v1/receivables?asOf=${encodeURIComponent(asOf)}&overdueOnly=${overdueOnly}&pageSize=100`, { method: "GET" }, token);
+export function listReceivables(token: string, asOf: string, overdueOnly: boolean, page = 1, filters: ReceivableFilters = {}): Promise<{ items: ReceivableItem[]; page: number; pageSize: number; hasMore: boolean }> {
+  return request(`/api/v1/receivables?${new URLSearchParams({ asOf, overdueOnly: String(overdueOnly), page: String(page), pageSize: "50", ...filters })}`, { method: "GET" }, token);
+}
+
+export function listOverdueAccounts(token: string, asOf: string, page = 1, filters: ReceivableFilters = {}): Promise<{ items: OverdueAccountItem[]; page: number; pageSize: number; hasMore: boolean }> {
+  return request(`/api/v1/receivables/overdue-accounts?${new URLSearchParams({ asOf, page: String(page), pageSize: "50", ...filters })}`, { method: "GET" }, token);
+}
+
+export function getReceivableFilterOptions(token: string): Promise<ReceivableFilterOptions> {
+  return request("/api/v1/receivables/filter-options", { method: "GET" }, token);
 }
 
 export function getAgingSummary(token: string, asOf: string): Promise<AgingSummary> {
@@ -476,7 +634,9 @@ async function request<T>(path: string, init: RequestInit, token?: string): Prom
   if (response.status === 204) return undefined as T;
   const payload = await response.json() as { data?: T; error?: { code: string; message: string } };
   if (!response.ok || !payload.data) {
-    throw new ApiError(payload.error?.code ?? "REQUEST_FAILED", payload.error?.message ?? "The request failed.", response.status);
+    const error = new ApiError(payload.error?.code ?? "REQUEST_FAILED", payload.error?.message ?? "The request failed.", response.status);
+    if (token && (error.code === "AUTHENTICATION_REQUIRED" || error.code === "SESSION_LOCKED" || error.status === 403)) sessionFailureHandler?.(token, error);
+    throw error;
   }
   return payload.data;
 }

@@ -21,6 +21,7 @@ export async function renderReportPdf(report: ReportDocument): Promise<Buffer> {
   const definition = {
     info: { title: report.title, author: "BCIS" },
     pageOrientation: report.columns.length > 6 ? "landscape" : "portrait",
+    pageSize: report.columns.length > 10 ? "A3" : "A4",
     pageMargins: [28, 38, 28, 38],
     defaultStyle: { font: "Helvetica", fontSize: 8 },
     footer: (currentPage: number, pageCount: number) => ({ text: `BCIS • Page ${currentPage} of ${pageCount}`, alignment: "center", fontSize: 7, color: "#64748b" }),

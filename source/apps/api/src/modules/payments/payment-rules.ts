@@ -10,6 +10,16 @@ export interface ProposedAllocation {
   amountCentavos: bigint;
 }
 
+export type InvoiceSettlementStatus = "OPEN" | "PARTIALLY_PAID" | "PAID";
+
+export function invoiceSettlementStatus(paidCentavos: bigint, totalCentavos: bigint): InvoiceSettlementStatus {
+  if (totalCentavos <= 0n || paidCentavos < 0n || paidCentavos > totalCentavos) {
+    throw new AppError(500, "INVALID_INVOICE_SETTLEMENT", "Invoice settlement values are inconsistent.");
+  }
+  if (paidCentavos === 0n) return "OPEN";
+  return paidCentavos === totalCentavos ? "PAID" : "PARTIALLY_PAID";
+}
+
 export function allocateOldestFirst(amountCentavos: bigint, invoices: readonly OpenInvoiceBalance[]): { allocations: ProposedAllocation[]; unallocatedCentavos: bigint } {
   if (amountCentavos <= 0n) throw new AppError(400, "INVALID_PAYMENT_AMOUNT", "Payment amount must be greater than zero.");
   let remaining = amountCentavos;

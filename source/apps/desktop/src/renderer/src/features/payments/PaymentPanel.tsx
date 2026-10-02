@@ -1,9 +1,10 @@
 import { Search } from "lucide-react";
-import { useState, type FormEvent } from "react";
+import { useRef, useState, type FormEvent } from "react";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { ApiError, getPaymentPreview, listSubscribers, postPayment, type PaymentPreview, type PaymentResult, type SubscriberListItem } from "@/lib/api-client";
+import { PendingCommand } from "@/lib/pending-command";
 
 export function PaymentPanel({ token, canPrint }: { token: string; canPrint: boolean }) {
   const [search, setSearch] = useState("");
@@ -14,6 +15,7 @@ export function PaymentPanel({ token, canPrint }: { token: string; canPrint: boo
   const [posted, setPosted] = useState<PaymentResult | null>(null);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
+  const pendingCommand = useRef(new PendingCommand());
 
   async function searchSubscribers(event: FormEvent) {
     event.preventDefault();
@@ -30,14 +32,18 @@ export function PaymentPanel({ token, canPrint }: { token: string; canPrint: boo
   async function confirm() {
     if (!selected || !preview) return;
     setBusy(true);
-    try { setPosted(await postPayment(token, { subscriberId: selected.id, amountCentavos: preview.amountCentavos, method: "CASH", commandKey: crypto.randomUUID() })); setPreview(null); setError(""); }
+    try {
+      const commandKey = pendingCommand.current.keyFor(`${selected.id}:${preview.amountCentavos}`);
+      const result = await postPayment(token, { subscriberId: selected.id, amountCentavos: preview.amountCentavos, method: "CASH", commandKey });
+      setPosted(result); setPreview(null); setError(""); pendingCommand.current.clear();
+    }
     catch (caught) { setError(message(caught)); }
     finally { setBusy(false); }
   }
 
-  if (posted?.receipt) return <Receipt result={posted} canPrint={canPrint} onAnother={() => { setPosted(null); setSelected(null); setAmount(""); setSubscribers([]); }} />;
+  if (posted?.receipt) return <Receipt result={posted} canPrint={canPrint} onAnother={() => { pendingCommand.current.clear(); setPosted(null); setSelected(null); setAmount(""); setSubscribers([]); }} />;
 
-  return <section className="rounded-xl border bg-surface p-6"><h2 className="text-lg font-semibold">Receive cash payment</h2><p className="text-sm text-muted-foreground">Payments are allocated to the oldest open invoice first. Overpayments remain blocked until the advance-credit policy is approved.</p><form className="mt-5 flex gap-2" onSubmit={searchSubscribers}><div className="relative flex-1"><Search className="absolute left-3 top-3 size-4 text-muted-foreground" /><Input className="pl-9" placeholder="Search subscriber account or name" value={search} onChange={(event) => setSearch(event.target.value)} /></div><Button type="submit" variant="outline">Search</Button></form>{subscribers.length > 0 && <div className="mt-3 max-h-44 overflow-auto rounded-lg border">{subscribers.map((subscriber) => <button className={`block w-full border-b px-4 py-3 text-left text-sm last:border-0 ${selected?.id === subscriber.id ? "bg-accent/10" : "hover:bg-muted"}`} key={subscriber.id} onClick={() => { setSelected(subscriber); setPreview(null); }} type="button"><span className="font-medium">{subscriber.accountNumber}</span> · {subscriber.firstName} {subscriber.lastName}</button>)}</div>}{selected && <div className="mt-5 rounded-lg border bg-muted/30 p-4"><p className="font-medium">{selected.firstName} {selected.lastName}</p><p className="text-sm text-muted-foreground">{selected.accountNumber}</p><div className="mt-3 flex max-w-md gap-2"><Input inputMode="decimal" placeholder="Amount in PHP" value={amount} onChange={(event) => { setAmount(event.target.value); setPreview(null); }} /><Button onClick={() => void prepare()} type="button" variant="accent">Preview allocation</Button></div></div>}{error && <p className="mt-4 text-sm text-danger">{error}</p>}{preview && <div className="mt-5 rounded-lg border p-4"><div className="flex justify-between"><div><p className="font-medium">Allocation preview</p><p className="text-sm text-muted-foreground">Outstanding: {peso(preview.outstandingCentavos)}</p></div><p className="text-xl font-semibold tabular-nums">{peso(preview.amountCentavos)}</p></div><div className="mt-3 divide-y rounded-md border">{preview.allocations.map((allocation) => <div className="flex justify-between p-3 text-sm" key={allocation.invoiceId}><span>{allocation.invoiceNumber}</span><span className="tabular-nums">{peso(allocation.amountCentavos)}</span></div>)}</div>{preview.overpaymentBlocked ? <p className="mt-3 text-sm text-danger">Unallocated amount {peso(preview.unallocatedCentavos)} cannot be posted.</p> : <Button className="mt-4" disabled={busy} onClick={() => void confirm()} variant="accent">Confirm and issue receipt</Button>}</div>}</section>;
+  return <section className="rounded-xl border bg-surface p-6"><h2 className="text-lg font-semibold">Receive cash payment</h2><p className="text-sm text-muted-foreground">Payments are allocated to the oldest open invoice first. Overpayments remain blocked until the advance-credit policy is approved.</p><form className="mt-5 flex gap-2" onSubmit={searchSubscribers}><div className="relative flex-1"><Search className="absolute left-3 top-3 size-4 text-muted-foreground" /><Input className="pl-9" placeholder="Search subscriber account or name" value={search} onChange={(event) => setSearch(event.target.value)} /></div><Button type="submit" variant="outline">Search</Button></form>{subscribers.length > 0 && <div className="mt-3 max-h-44 overflow-auto rounded-lg border">{subscribers.map((subscriber) => <button className={`block w-full border-b px-4 py-3 text-left text-sm last:border-0 ${selected?.id === subscriber.id ? "bg-accent/10" : "hover:bg-muted"}`} key={subscriber.id} disabled={busy || pendingCommand.current.hasPending} onClick={() => { setSelected(subscriber); setPreview(null); }} type="button"><span className="font-medium">{subscriber.accountNumber}</span> · {subscriber.firstName} {subscriber.lastName}</button>)}</div>}{selected && <div className="mt-5 rounded-lg border bg-muted/30 p-4"><p className="font-medium">{selected.firstName} {selected.lastName}</p><p className="text-sm text-muted-foreground">{selected.accountNumber}</p><div className="mt-3 flex max-w-md gap-2"><Input disabled={busy || pendingCommand.current.hasPending} inputMode="decimal" placeholder="Amount in PHP" value={amount} onChange={(event) => { setAmount(event.target.value); setPreview(null); }} /><Button disabled={busy || pendingCommand.current.hasPending} onClick={() => void prepare()} type="button" variant="accent">Preview allocation</Button></div></div>}{error && <p className="mt-4 text-sm text-danger">{error}{pendingCommand.current.hasPending && <span className="block">If the response was lost, retry the same payment. Do not start another until you check payment history.</span>}</p>}{preview && <div className="mt-5 rounded-lg border p-4"><div className="flex justify-between"><div><p className="font-medium">Allocation preview</p><p className="text-sm text-muted-foreground">Outstanding: {peso(preview.outstandingCentavos)}</p></div><p className="text-xl font-semibold tabular-nums">{peso(preview.amountCentavos)}</p></div><div className="mt-3 divide-y rounded-md border">{preview.allocations.map((allocation) => <div className="flex justify-between p-3 text-sm" key={allocation.invoiceId}><span>{allocation.invoiceNumber}</span><span className="tabular-nums">{peso(allocation.amountCentavos)}</span></div>)}</div>{preview.overpaymentBlocked ? <p className="mt-3 text-sm text-danger">Unallocated amount {peso(preview.unallocatedCentavos)} cannot be posted.</p> : <Button className="mt-4" disabled={busy} onClick={() => void confirm()} variant="accent">Confirm and issue receipt</Button>}</div>}</section>;
 }
 
 function Receipt({ result, canPrint, onAnother }: { result: PaymentResult; canPrint: boolean; onAnother: () => void }) {

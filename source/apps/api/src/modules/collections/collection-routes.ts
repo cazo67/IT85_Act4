@@ -7,7 +7,7 @@ import type { SecurityActor } from "../security-admin/security-admin-service.js"
 import type { CollectionService } from "./collection-service.js";
 
 const id = z.string().uuid();
-const date = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
+const date = z.string().regex(/^\d{4}-\d{2}-\d{2}$/).refine((value) => { const parsed = new Date(`${value}T00:00:00.000Z`); return !Number.isNaN(parsed.getTime()) && parsed.toISOString().slice(0, 10) === value; }, "Use a valid calendar date.");
 const centavos = z.string().regex(/^(0|[1-9]\d*)$/);
 const positiveCentavos = z.string().regex(/^[1-9]\d*$/);
 

@@ -1,4 +1,5 @@
 import { relative, resolve } from "node:path";
+import { isDeepStrictEqual } from "node:util";
 
 import { AppError } from "../../app/app-error.js";
 
@@ -14,6 +15,10 @@ export function requirePathInside(root: string, candidate: string): string {
   const child = relative(safeRoot, safeCandidate);
   if (!child || child.startsWith("..") || /^[A-Za-z]:/.test(child)) throw new AppError(500, "UNSAFE_BACKUP_PATH", "The backup path is outside the configured backup root.");
   return safeCandidate;
+}
+
+export function financialSnapshotsMatch(manifestSnapshot: unknown, storedSnapshot: unknown): boolean {
+  return isDeepStrictEqual(manifestSnapshot, storedSnapshot);
 }
 
 export function postgresEnvironment(databaseUrl: string): NodeJS.ProcessEnv {

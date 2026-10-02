@@ -6,6 +6,6 @@
     "types": ["node"],
     "noEmit": true
   },
-  "include": ["seeds/**/*.ts"]
+  "include": ["scripts/**/*.ts", "seeds/**/*.ts"]
 }
 

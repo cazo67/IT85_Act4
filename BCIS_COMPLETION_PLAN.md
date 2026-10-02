@@ -1,391 +1,203 @@
-# BCIS Completion and Enhancement Plan
+# BCIS Approved Phased Implementation Plan
 
-Date prepared: 2026-09-26  
-Status: planning complete; implementation requires user approval  
-Scope authority: `CODEX_BCIS_PLANNING_PROMPT.md`, the current repository, and documented verification evidence. The official laboratory PDF and official CP1-CP6 definitions are not present, so final rubric compliance cannot yet be certified.
+Updated: 2026-09-30
+Status: approved implementation direction; the individual financial policies listed below are **not** approved. Final acceptance remains incomplete.
 
-## 1. Objective and completion rule
+## How to resume with limited context
 
-Finish BCIS as a reliable, explainable student laboratory submission while preserving its Electron -> Fastify -> PostgreSQL architecture and financial-history safeguards. Improvements beyond the minimum will be limited to changes that materially improve reliability, security, usability, verification, or submission clarity.
+Read this file and the **Current handoff** at the top of [BCIS_PROGRESS_AND_DOCUMENTATION.md](BCIS_PROGRESS_AND_DOCUMENTATION.md). These are the only two active execution files. The laboratory activity is the fixed requirements reference; other Markdown files are supporting detail or dated evidence. A new session should not infer completion from source files, old phase names, or a previous chat.
 
-BCIS must not be called complete until:
+1. Confirm the current Git status and the handoff's last recorded checkpoint. Preserve all pre-existing edits, including untracked work; do not reset or broadly reformat.
+2. Select the first **Open** item in the handoff's Next work list. Inspect its actual source, test, route, schema and permissions before editing. Work on one small vertical task at a time.
+3. Use the relevant gate below for acceptance criteria. Add only the tests needed to prove the behavior, run the focused checks and then the required static gate when changes warrant it. Separate local, PostgreSQL, Electron, installer and LAN evidence.
+4. Update the handoff **in the same work session**: status, files changed, exact commands/results, assertions, defects, current blocker and the next one actionable task. Keep older dated entries intact as history. Never mark a gate passed because it was planned, a build succeeded, or a button appeared.
+5. If work stops mid-task, write **In progress** with the exact files touched, unfinished change, known failures and the command to resume. If a policy or external environment blocks that task, mark it Blocked and continue with another independent required task only when its ordering is safe.
 
-1. every applicable activity requirement has a passed test or dated manual evidence;
-2. every policy-dependent requirement is either approved and implemented or formally excluded by the instructor;
-3. PostgreSQL, installer, printing, backup/restore, and three-client checks have been performed in their required environments; and
-4. the final repository, documentation, evidence, and release package are complete and reproducible.
+Allowed status words: **Verified**, **Implemented but unverified**, **Partial**, **Blocked by policy**, **Missing**. “Verified” always identifies the environment and evidence. The handoff is the current status authority; this plan is the implementation and acceptance authority. Keep the detailed checklist and AT matrix as supporting references, but do not require a future session to read them to find its next step.
 
-## 2. Current architecture to preserve
+## Authority and document ownership
 
-- `source/apps/desktop`: Electron main/preload plus React renderer; no database credentials or authoritative financial rules.
-- `source/apps/api`: Fastify routes, authorization, domain services, report generation, PostgreSQL access, and backup orchestration.
-- `source/packages/shared`: safe money, permissions, and shared contracts.
-- `database`: ordered Drizzle migrations and deterministic synthetic seeds.
-- `docs`, `tests`, `reports-samples`, and `release`: documentation, evidence, sample outputs, and distributables.
+The [laboratory activity](BCIS_Subscription_Billing_and_Collection_Laboratory_Activity.md) is the requirements baseline, including CP1–CP6, AT-01–AT-12 and D1–D8. Its technology table is labelled recommended; functional and acceptance requirements remain mandatory unless the instructor records an exclusion. Archived prompts do not override this baseline.
 
-Preserve these design decisions:
+- [This plan](BCIS_COMPLETION_PLAN.md): approved scope, gate order, task acceptance and required activity coverage.
+- [Progress and documentation record](BCIS_PROGRESS_AND_DOCUMENTATION.md): current handoff, status and dated implementation evidence.
+- [Development checklist](BCIS_Development_Status_Checklist.md), [AT matrix](tests/acceptance/AT-01-AT-12.md) and [documentation index](docs/README.md): supporting detail, not competing execution plans.
 
-- integer centavos for money;
-- immutable finalized financial history with compensating reversals;
-- transaction-scoped financial operations;
-- API-enforced permissions independent of hidden UI controls;
-- opaque in-memory desktop session tokens;
-- context isolation, sandboxing, disabled Node integration, restricted CSP/navigation, and narrow IPC;
-- central API/database deployment rather than shared database files on clients;
-- append-only migration history after a migration has been exercised against a real database.
+The earlier cleanup approval authorized documentation consolidation. This plan now defines future implementation work; it does not itself approve unresolved business rules or record a completed feature.
 
-## 3. Current evidence baseline
+## Architecture and completion rule
 
-On 2026-09-26, `tests/Run-StaticAcceptance.ps1` passed:
+Extend the existing Electron → Fastify → Drizzle → PostgreSQL modules. Preserve integer-centavo accounting, opaque sessions, server authorization, transactional posting, compensating history, append-only applied migrations, and Electron isolation/CSP/IPC controls. Never put database credentials or authoritative financial calculations in the renderer.
 
-- TypeScript typecheck for shared, database tools, API, and desktop.
-- API: 42/42 tests.
-- Electron main: 2/2 tests.
-- Shared package: 4/4 tests.
-- API and Electron production builds.
-- Drizzle schema/migration consistency.
+Completion requires evidence for every applicable requirement, accepted policy-dependent workflows or explicit instructor exclusions, clean deployment/recovery, three-client operation, and complete D1–D8 artifacts. Passing unit tests or building an installer is insufficient.
 
-`deployment/windows/Test-BcisPrerequisites.ps1` ran successfully as a checker but returned failure because PostgreSQL 16 `pg_dump.exe` and `pg_restore.exe` are absent. Node.js v24.15.0 and API port 4100 are available.
+## Verified baseline
 
-This baseline is static evidence only. It does not prove PostgreSQL transactions, installed Electron behavior, printing, recovery, or multi-client operation.
+The read-only audit on 2026-09-28 found:
 
-## 4. Requirement comparison
+- 48 API, 3 Electron configuration and 4 shared tests passed (55 total); workspace typechecks, Drizzle consistency, source-integrity checks and diff whitespace checks passed.
+- API live/ready returned 200; PostgreSQL 18 on port 5433 records migrations 0000–0012.
+- The existing Cash slice includes partial payment, final settlement, compensating reversal and API restart evidence.
+- Direct database totals: invoice outstanding and ledger net both 7,913,900 centavos; invoice paid and active allocations both 50,000 centavos. This is a current snapshot, not historical AR acceptance.
+- One verified backup and a checksummed NSIS artifact exist. Isolated restore, clean installation, printing and three-PC acceptance remain open.
+- Live data: 2 users, 51 subscribers, 61 services, 7 plans, 2 collectors, 3 areas, 1 billing month, 2 Cash payments and 1 reversal. No overdue accounts, collection batches/remittances, service-control scenarios, GCash proofs or advance credits.
+- The latest audit reran non-writing checks only. Prior production-build/full static-gate results are historical, not a fresh full-gate result.
 
-| Requirement area | Current state | Completion gap |
+## Priority defects
+
+Track details and acceptance in [the defect log](docs/defect-log.md).
+
+1. Packaged file-origin API requests fail CORS (Origin: null returned 500 while ordinary health returned 200).
+2. Cash/batch retry buttons generate new command keys; preserve a command key across uncertain submissions and retries.
+3. Shared query cache survives sign-out and is not scoped to users; cancel/clear or safely partition it and test account switching.
+4. Generic service updates permit suspension/reactivation outside the independent approval workflow.
+5. Backup manifest totals and pg_dump do not share a consistent snapshot during concurrent writes.
+6. Complete drawer focus trapping/restoration and verify all layouts for overflow.
+
+These findings are unresolved. Do not describe this documentation update as fixing them.
+
+## Complete activity coverage
+
+The system is for three office PCs on a LAN. Keep one central Fastify/PostgreSQL server, straightforward indexed and paginated queries, and basic reliable security. The activity also states large data targets; check representative query/index behavior, but do not add cloud services, microservices or speculative scaling infrastructure. All required end-to-end behavior and the database relationships/constraints in activity sections 3–5 remain in scope.
+
+| Activity requirement | Implementation gate | Minimum proof before complete |
 |---|---|---|
-| Electron/Fastify/PostgreSQL architecture | Implemented at code level | Live database and installed-client proof required |
-| Authentication and seven roles | Implemented with Argon2, opaque sessions, lock/logout, role permissions, and API guards | Idle auto-lock/session policy approval and packaged-role evidence required |
-| Subscriber, address, contact, plan, service-account management | Implemented | Live CRUD, duplicate, lifecycle, pagination, and UI evidence required |
-| Global search | Missing as a cross-module feature | Current search is mainly subscriber/user scoped; implement the required account/name/contact/address/service/invoice/receipt search |
-| Billing and immutable ledger debit | Implemented at code level | PostgreSQL transaction, retry, concurrency, and reconciliation evidence required |
-| Exact/partial/oldest-first cash payment | Implemented at code level | Live allocation, receipt, ledger, SOA, and failure-injection evidence required |
-| Advance payment/credit | Deliberately blocked | Instructor must define ownership, application, refund, and allocation policy before implementation |
-| GCash proof and duplicate protection | Schema foundation exists; posting/upload deliberately blocked | Instructor must define duplicate scope, override, verification separation, attachment limits, and retention |
-| Receipt and reversal | Implemented at code level | Installed print/preview, void watermark, PostgreSQL balance, and audit proof required |
-| Collection batches/remittance | Balanced cash workflow implemented | Live reconciliation required; shortage/overage close policy remains unresolved |
-| AR aging and as-of history | Implemented at code level | PostgreSQL historical reconciliation and approved Asia/Manila timezone behavior required |
-| Suspension/reconnection | Manual request/approve/complete path implemented | Automatic cutoff, qualifying payment, rejection/cancellation, and fees need approved rules |
-| Dashboard and four reports | Implemented with PDF/XLSX samples | Official report list/branding, live totals, installed print, and visual review required |
-| Audit logging/viewer | Implemented at code level | Live actor/before-after coverage audit and retention decision required |
-| Backup/restore | Orchestration and safety rules implemented | Source files are currently ignored by Git; real tools, backup, catalog verification, isolated restore, and checksum reconciliation required |
-| Electron security | Strong foundation and two tests | Installed navigation/CSP/permission/IPC tests and production configuration proof required |
-| API logging/error contract | Implemented foundation | Service log rotation, operational capture, and redaction evidence required |
-| Seed/demo data | 7 plans, 3 areas/routes, 2 collectors, 50 subscribers, and 60 services | Clean PostgreSQL execution, repeatability, required financial scenarios, and count assertions required |
-| AT-01 through AT-12 | Rule-level evidence exists | All rows remain Partial or Blocked except limited automated authorization evidence |
-| Installer/release | NSIS configuration exists | No installer or release checksums exist |
-| Documentation | Markdown overview/manual/ERD/deployment/checklists exist | Final PDF/DOCX exports, traceability, screenshots, acceptance report, defense deck/guide, and final manifest are missing |
-| Git/AI workflow | Repository initialized | Zero commits and zero tracked files; meaningful history and reviewable checkpoints are missing |
-| Official rubric | Unavailable | Obtain and map official PDF plus CP1-CP6 before final acceptance |
-
-## 5. Critical findings to address first
-
-1. `.gitignore` contains `backups/`, which ignores both `source/apps/api/src/modules/backups/` and `source/apps/desktop/src/renderer/src/features/backups/`. A commit made now would omit working source required by imports.
-2. The repository has no commits and no tracked files. Deliverable D1 therefore is not satisfied.
-3. The official laboratory specification and CP1-CP6 definitions are absent.
-4. GCash and advance-payment demonstrations are required by the supplied activity brief but cannot be safely implemented from the available policy.
-5. No PostgreSQL-backed integration tests currently prove the main domain services. Most automated evidence is rule-level.
-6. No NSIS installer, UI screenshot set, signed acceptance output, or final documentation export exists.
-7. The desktop uses a single large navigation shell and has no required cross-module global search.
-8. Session expiry exists, but automatic idle locking is not implemented in the renderer.
-
-## 6. Planned file structure
-
-### Create during implementation
-
-```text
-BCIS_PROGRESS_AND_DOCUMENTATION.md
-docs/
-  requirements-traceability.md
-  defense-guide.md
-  submission-manifest.md
-  generated/
-    technical-documentation.pdf
-    user-manual.pdf
-    erd.pdf
-tests/
-  integration/
-    auth-postgres.test.ts
-    billing-postgres.test.ts
-    payments-postgres.test.ts
-    collections-postgres.test.ts
-    receivables-postgres.test.ts
-    backup-restore.test.ts
-  acceptance/
-    acceptance-test-report.md
-  evidence/
-    YYYY-MM-DD/
-      environment.md
-      commands.log
-      checksums.sha256
-  screenshots/
-    .gitkeep
-release/
-  .gitkeep
-```
-
-Create integration files only when a disposable PostgreSQL test database is available. Generate binary documentation and release artifacts from reviewed sources; do not hand-edit generated output.
-
-### Update during implementation
-
-- `.gitignore`: scope runtime backup exclusions to runtime data paths without ignoring source modules.
-- `README.md`, `docs/README.md`, `tests/README.md`: add authoritative navigation and exact verification boundaries.
-- `source/package.json`: add reliable verify, integration, evidence, and submission-check scripts where justified.
-- `tests/Run-StaticAcceptance.ps1`: retain fail-fast native exit handling; add artifact/source-presence checks.
-- `deployment/windows/Test-BcisPrerequisites.ps1`: retain Windows PowerShell compatibility and add version/path diagnostics only if needed.
-- `source/apps/api/package.json`: retain stable test timeouts and add integration scripts separately from unit tests.
-- `source/apps/api/src/modules/*`: change only for confirmed defects, approved policies, global search, and verified requirements.
-- `source/apps/desktop/src/renderer/src/*`: add global search, idle lock, clearer workflow feedback, and evidence-ready UI only after API contracts are approved.
-- `database/migrations/*`: append new migrations; do not rewrite exercised history.
-- `database/seeds/*`: add deterministic financial/demo scenarios and count assertions.
-- `tests/acceptance/AT-01-AT-12.md`: update only from retained evidence.
-- `docs/defect-log.md`, `docs/release-notes.md`, and each affected phase verification file: record actual results, not planned claims.
-
-### Retain without redesign
-
-- Electron/Fastify/PostgreSQL responsibility boundaries.
-- Existing schema modules, domain services, report renderers, shared money/permission contracts, and sanitized sample reports.
-- Existing financial invariants and policy-safe fail-closed behavior.
-- Existing migration files `0000` through `0011`, unless a disposable database proves they have never been applied and a documented correction is safer. Default action is append-only migration.
-
-## 7. Phased implementation plan
-
-### Phase 0 - Requirement baseline and safe repository capture
-
-Work:
-
-- obtain the official laboratory PDF, CP1-CP6 definitions, required report templates/logo, and instructor decisions;
-- correct `.gitignore` so backup source modules are trackable while runtime archives remain excluded;
-- confirm all intended source/document/sample files appear in `git status`;
-- scan for secrets, customer data, dumps, backups, logs, and generated build output;
-- create the first meaningful baseline commit only after review.
+| Seven roles, login/logout/lock, inactive/failed-login handling, granular server permissions, audit | 1–3, 5 | Role matrix and forbidden direct API calls, session changes, audit actor/reason |
+| Subscribers, contacts/addresses, multiple Internet/Cable/Combo services, plans, future-only prices and global search | 2–3 | Create/edit/deactivate, historical invoice price intact, restart and cross-client visibility |
+| Monthly billing, all required invoice states, lines, unique numbers, duplicate prevention, immutable ledger and printable SOA | 2–4 | Preview/finalize/retry/concurrency, invoice/ledger/SOA reconciliation, controlled void/credit where approved |
+| Cash, GCash, Bank Transfer, Cheque and Other; exact/partial/advance; oldest-first allocation, proof review, receipts and reversal | 2–4 | Each enabled method posts with correct permission/audit; AT-01–06; no lost centavo or repeated receipt |
+| Areas, routes, collectors, route sheets, batch lifecycle, remittance and shortage/overage | 3–4 | Cash and non-cash totals, AT-07/08, persisted differences and approved closure |
+| AR aging, overdue filters/details, suspension and reconnection | 3–4 | Current/1–30/31–60/61–90/90+ reconciliation, distinct actors and service history |
+| Dashboard, required reports, PDF/XLSX, receipt/statement printing and dense usable UI | 3–4, 6 | Source totals match exports; role access; installed printing; responsive keyboard navigation |
+| Transactional posting, exact money, uniqueness, indexes/pagination, sanitized errors/logs, proof validation and secure Electron boundary | 1–5 | Real database rollback/concurrency, security tests, no renderer DB access/secrets |
+| PostgreSQL and attachment backup/verification/restore, installer and three simultaneous LAN PCs | 5–6 | AT-09/12, isolated restore totals, clean install, reconnect/interruption, restricted DB/firewall |
+| Documentation, synthetic demo dataset, instructor checkpoints, AT-01–AT-12 and D1–D8 | 7 | Dated artifacts, checksums, accepted test outcomes, complete demonstration and defense |
 
-Verification:
+Payment methods, invoice/batch state labels and screen navigation are currently incomplete relative to the activity. Map current `OPEN` and batch statuses to the required semantics explicitly; where a real missing state or action is needed, implement it with a reviewed migration and tests. A UI label alone does not satisfy a database workflow.
 
-```powershell
-git check-ignore -v source/apps/api/src/modules/backups/backup-service.ts
-git check-ignore -v source/apps/desktop/src/renderer/src/features/backups/BackupPanel.tsx
-git status --short --untracked-files=all
-git ls-files
-rg -n -i "BEGIN (RSA|OPENSSH|EC) PRIVATE KEY|api[_-]?key|access[_-]?token" . -g "!source/node_modules/**"
-```
+The required acceptance scenarios are: AT-01 exact Cash; AT-02 partial Cash; AT-03 advance credit; AT-04 oldest-first arrears; AT-05 duplicate verified GCash reference; AT-06 reversal; AT-07 balanced remittance; AT-08 visible blocked shortage; AT-09 simultaneous clients; AT-10 direct API authorization; AT-11 repeated billing; AT-12 isolated backup/restore. Retain their exact examples and expected values from the activity and record results in the progress handoff. AT-08 can prove visible shortage and blocked balanced closure before any shortage settlement policy is approved.
 
-Acceptance: both backup source folders are trackable, runtime artifacts remain ignored, no secret/data artifact is staged, and the baseline commit contains the complete application.
+Demo data target from the activity: at least five distinct role-covering users, seven plans (3 Internet, 2 Cable, 2 Combo), 50 subscribers, 60+ service accounts, two collectors, three areas, three billing months, mixed approved payments, ten overdue accounts across aging buckets, an approved reversal/void example and two service-control scenarios. Use synthetic records only. The existing counts meet some, not all, of these targets.
 
-Rollback: revert only the `.gitignore`/documentation commit; never delete untracked source as cleanup.
+## Gated execution order
 
-### Phase 1 - Verification harness and local reliability
+### Gate 0 — Baseline and contracts
 
-Work:
+Retain existing dirty files; review changes without resets or broad reformatting. Maintain the [integration contract map](docs/architecture/integration-contract-map.md). Reconcile current requirements against the supplied activity rather than archived planning assumptions.
 
-- preserve fail-fast PowerShell behavior and stable authentication timeouts;
-- add a submission verifier that checks critical source, migrations, samples, documentation, and prohibited files;
-- add API route tests for permissions, validation, error contracts, and policy-blocked endpoints;
-- add focused React/Electron tests for session state, permission navigation, report save validation, and idle lock;
-- add encoding/render checks for Markdown and UI labels on Windows;
-- record dependency audit findings without forced major-version overrides.
+Current state: contract map and requirements audit are documented. The dirty tree is deliberately preserved. Recheck this gate when routes/screens/schema change; do not repeat the entire audit at the start of every session.
 
-Verification:
+Exit: every module has UI/API/permission/table/evidence mapping and a current status.
 
-```powershell
-& .\tests\Run-StaticAcceptance.ps1
-corepack pnpm --dir source audit --prod --audit-level high
-```
+### Gate 1 — Readiness, session and retry reliability
 
-Acceptance: a deliberately failing child command makes the runner exit nonzero; all normal checks pass twice from a cold terminal; critical source cannot be silently ignored.
+Repair the priority connectivity, cache, retry and service-control authorization defects. Preserve route contracts unless an incompatible defect is demonstrated. Confirm dev and packaged owner login, forced password change, lock/logout and lower-role denials. Use existing PostgreSQL 18/5433 and API 4100; keep all credentials separate and outside Git.
 
-Rollback: keep tests and scripts in isolated commits so any unreliable check can be reverted without touching application logic.
+Execute as four reviewable tasks in this order:
 
-### Phase 2 - Required local feature completion
+1. **D-010 packaged connection:** inspect `source/apps/api/src/app/build-app.ts`, `source/apps/api/src/config/env.ts`, Electron main/preload and renderer API configuration. Fix the file-origin CORS case narrowly while retaining the allowlist and Electron CSP. Add an API regression for allowed packaged and denied foreign origins; launch the packaged client and prove live/ready plus login.
+2. **D-011 retry identity:** inspect the Cash and batch payment panels, API idempotency logic and `payments`/batch uniqueness. Persist one command key for a pending user action through uncertain response/retry; issue a new key only for a genuinely new action. Test dropped response, same-key retry, different payload conflict and one payment/receipt/allocation/ledger set.
+3. **D-012 session isolation:** inspect `App.tsx`, `query-client.ts`, `query-keys.ts` and authentication routes. Cancel/clear or partition queries and pending requests on logout, lock/expiry and account/permission changes. Test switching from Owner to a lower role without showing previous data.
+4. **D-013 service authority:** inspect `subscriber-routes.ts`, `subscriber-service.ts` and receivables service-control routes. Reject generic status changes that require suspension/reconnection approval; retain ordinary approved service editing. Test direct API attempts and the approved multi-actor flow.
 
-Work that does not require policy invention:
+Do not use production credentials or an existing customer's account as test fixtures. A development Electron launch cannot replace the packaged-client check.
 
-- implement server-side global search across the required identifiers with bounded pagination;
-- add permission-aware desktop global search and direct navigation to results;
-- implement configurable renderer idle warning/lock while retaining the API's absolute session expiry;
-- improve loading, empty, retry, validation, keyboard, focus, text-plus-color status, and narrow-window behavior;
-- ensure every state-changing screen shows a safe confirmation and actionable error;
-- add missing rejection/cancellation actions only if their behavior is already unambiguous and non-financial.
+Exit: installed/dev API access works; retry after a lost response cannot duplicate payment; account changes cannot show another session's cached records; service controls cannot bypass approval.
 
-Likely files:
+### Gate 2 — Cash workflow and database integration
 
-- `source/apps/api/src/modules/search/search-routes.ts` and `search-service.ts`;
-- `source/apps/api/src/app/build-app.ts` and `source/apps/api/src/server.ts`;
-- `source/apps/desktop/src/renderer/src/features/search/GlobalSearch.tsx`;
-- `source/apps/desktop/src/renderer/src/App.tsx`;
-- `source/apps/desktop/src/renderer/src/features/auth/*`;
-- `source/apps/desktop/src/renderer/src/lib/api-client.ts`;
-- new focused unit/route/UI tests.
+Use a dedicated disposable bcis_test database with explicit target guards. Add real PostgreSQL integration tests for auth, subscriber/service CRUD, billing, allocations, ledger, receipts, reversal, collections, AR, reports and permissions. Prove failure rollback, uniqueness, repeated command keys, concurrent billing/payment and restart persistence. Re-run the full subscriber → service → billing → partial Cash → reports/audit → restart workflow through Electron.
 
-Acceptance: search results are authorized, bounded, deterministic, and cover account/name/contact/address/service/invoice/receipt; idle warning and lock work without persisting credentials; existing workflows and static tests remain green.
+Review `database/scripts/migrate.ts`, deterministic seeds, the API domain services/schema and `source/apps/api/test/`. Reject test configuration pointing at `bcis` or a production name before any test cleanup. Cover exact/partial/oldest-first and compensating reversal through real transactions; assert `invoice total − active allocations = receivable = ledger debits − credits` at the chosen cutoff. Test that failures leave no partial invoice, allocation, receipt, ledger or audit rows.
 
-Rollback: add search and idle-lock as separable commits; preserve existing navigation as a fallback until the new behavior passes UI checks.
+Exit: independently reconciled totals and transaction failure/concurrency evidence; no development/production data used by destructive tests.
 
-### Phase 3 - Policy-dependent functional completion
+### Gate 3 — Incremental frontend and approved operations
 
-Do not begin until written instructor/business decisions exist.
+Migrate one proven module at a time: auth/session → subscribers/services → billing/invoices → payments/ledger → receivables → collections → reports/audit/administration.
 
-Work:
+The sidebar, themes, breadcrumbs, shared QueryClient, dashboard/subscriber queries, subscriber TanStack Table and new-subscriber React Hook Form are already present. Extend them rather than restarting them. Keep server permission enforcement authoritative.
 
-- GCash proof upload, validation, quarantine/storage, duplicate detection, verify/reject, separation of duties, retention, backup inclusion, and UI;
-- advance credit creation, ownership, future application, refund rules, ledger treatment, and UI;
-- invoice void/adjustment authorization and compensating history;
-- collection shortage/overage approval and settlement;
-- suspension/reconnection thresholds, qualifying payment, fees, rejection, and cancellation;
-- approved numbering, timezone, tax/discount/penalty/proration, retention, and password/session rules.
+For each module, implement its missing API/domain behavior, data validation and role checks only where the activity requires them; then update the corresponding existing panel. Verify create/edit/state-change, errors, permission denial, persistence after restart, audit/report effects and cross-role visibility before moving to the next module. Keep navigation consistent with the activity's Dashboard, Subscribers, Billing, Payments, Collections, Receivables, Services, Reports and Administration groups; do not start a renderer rewrite.
 
-Acceptance: every policy maps to schema constraints, API permissions, audit events, UI states, tests, user documentation, and demo evidence with no lost centavo.
+Preserved tasks from the frontend-first plan:
 
-Rollback: each policy ships behind a fail-closed server rule and separate migration/feature commit. Never weaken the existing disabled behavior until the approved replacement passes.
-
-### Phase 4 - PostgreSQL integration and financial proof
-
-Environment: PostgreSQL 16+ on a disposable local or lab database.
-
-Work:
-
-- add documented clean-create, migrate, upgrade, and seed commands;
-- assert seed counts and required exact/partial/arrears/overdue/collection scenarios;
-- test billing, payment, reversal, collection, aging, service control, audit, and idempotency through real transactions;
-- test rollback through injected failures;
-- run concurrent duplicate billing/payment attempts;
-- independently reconcile invoices, allocations, ledger, receipts, batches, and reports.
-
-Verification outline:
-
-```powershell
-& .\deployment\windows\Test-BcisPrerequisites.ps1
-corepack pnpm --dir source db:migrate
-corepack pnpm --dir source db:seed-security
-corepack pnpm --dir source db:seed-master-data
-corepack pnpm --dir source test:integration
-Invoke-RestMethod http://127.0.0.1:4100/api/v1/health/ready
-```
-
-Acceptance: clean and upgrade paths succeed, seeds are repeatable, all financial totals reconcile, failures leave no partial rows, and concurrency results are deterministic.
-
-Rollback: use only disposable databases during development; restore from a verified pre-test backup before any rehearsal against a retained environment.
-
-### Phase 5 - Desktop E2E, printing, and presentation quality
-
-Work:
-
-- run the packaged or production desktop against synthetic PostgreSQL data;
-- exercise all role views and required workflows;
-- verify receipt/report print preview and a real approved printer;
-- verify PDF/XLSX content, peso/date formatting, totals, filenames, and spreadsheet safety;
-- audit 1024x680 minimum and representative larger displays, keyboard operation, overflow, and text-plus-color states;
-- capture sanitized UI screenshots and command/database evidence.
-
-Acceptance: required screens and demo sequence operate end to end with no raw SQL/stack traces, no clipped critical controls, and matching database/report evidence.
-
-Rollback: UI polish remains separate from domain changes; keep the last verified renderer build available during demonstration rehearsal.
-
-### Phase 6 - Backup, installer, LAN, and recovery
-
-Environment: PostgreSQL tools, isolated restore target, target Windows version, printer, and three PCs.
-
-Work:
-
-- create and verify a real custom-format backup and manifest;
-- restore to an isolated target using a single transaction;
-- compare pre/post financial counts and centavo totals;
-- build NSIS, install/uninstall cleanly, and calculate SHA-256 checksums;
-- configure restricted firewall scope and TLS or document accepted isolated HTTP;
-- run three clients concurrently with distinct users;
-- verify API restart, client recovery, logs, exports, and printing.
-
-Verification:
-
-```powershell
-corepack pnpm --dir source --filter @bcis/desktop dist:win
-Get-FileHash .\release\* -Algorithm SHA256
-```
-
-Acceptance: AT-09 and AT-12 pass with dated evidence; the installer works on a clean client; all three clients can operate safely; recovery totals match.
-
-Rollback: rehearse only on isolated systems; retain verified backup/checksum and installer from the last accepted build; never restore over the sole live database during testing.
-
-### Phase 7 - Final documentation, defense, and release
-
-Work:
-
-- produce requirement traceability, technical documentation, user manual, ERD export, acceptance report, defect log, defense guide/deck, screenshots, and submission manifest;
-- map every claim to command, screenshot, database assertion, artifact checksum, actor, date, and environment;
-- update `BCIS_PROGRESS_AND_DOCUMENTATION.md` after every completed phase;
-- create the release tag only after all applicable gates are signed.
-
-Acceptance: D1-D8 exist in the required structure, links resolve, generated files match reviewed sources, no sensitive data is included, and no Partial/Blocked item is described as passed.
-
-Rollback: regenerate binary documents from versioned Markdown; do not manually patch generated PDFs or acceptance evidence.
-
-## 8. Local versus external work
-
-### Achievable on the current machine after approval
-
-- `.gitignore` and repository integrity repair;
-- static test/harness improvements;
-- route, domain-rule, renderer, Electron, and documentation tests that do not need PostgreSQL;
-- global search and idle-lock implementation at code level;
-- accessibility/responsive/error-state improvements;
-- requirement traceability, defense guide, evidence templates, and final-source documentation;
-- installer attempt if required electron-builder resources are obtainable.
-
-### Requires PostgreSQL or additional local infrastructure
-
-- migrations and seed execution;
-- real transaction, rollback, concurrency, reporting, and reconciliation tests;
-- `pg_dump`/`pg_restore` backup and isolated restore;
-- authenticated full Electron workflows against durable data.
-
-### Requires instructor/business decisions
-
-- GCash workflow and duplicate policy;
-- advance credit/refund/allocation;
-- adjustment/void rules;
-- shortage/overage settlement;
-- automatic suspension/reconnection and fees;
-- numbering, billing calendar/timezone, penalties, tax, discount, proration, retention, and security thresholds;
-- official reports, templates, branding, and CP1-CP6 scope.
-
-### Requires target hardware or people
-
-- three-PC LAN/concurrency acceptance;
-- firewall/TLS approval;
-- physical printer checks;
-- clean Windows installation/uninstallation;
-- signed instructor/user acceptance and defense rehearsal.
-
-## 9. Practical enhancements beyond the minimum
-
-Include:
-
-- fail-fast submission verification;
-- cross-module global search required by the brief;
-- configurable idle warning/lock;
-- deterministic evidence folders and SHA-256 manifest;
-- focused accessibility and narrow-window checks;
-- clear health/preflight diagnostics;
-- a concise defense guide linking workflows to code and evidence.
-
-Do not add unless a demonstrated need appears:
-
-- microservices, Redis, message queues, Kubernetes, cloud storage, auto-update infrastructure, analytics, or a second database;
-- speculative financial policies;
-- broad framework rewrites or visual redesigns that threaten working flows.
-
-## 10. Main risks and controls
-
-| Risk | Control |
+| Original task groups | Remaining implementation/verification |
 |---|---|
-| Source silently omitted by ignore rules | Track critical-file assertions and review `git check-ignore` before the first commit |
-| Invented financial policy changes balances | Require written decisions; keep endpoints fail-closed until approved |
-| Unit tests mistaken for live acceptance | Separate static, integration, installed, hardware, and sign-off evidence |
-| Migration damages retained data | Append migrations, test clean/upgrade paths, back up before rehearsal |
-| Flaky or false-positive verification | Fail on native exit codes, use bounded timeouts, run twice from a cold terminal |
-| Secrets/customer data enter submission | Synthetic-only data, focused scans, `.env`/archive exclusions, staged-file review |
-| UI polish breaks financial behavior | Separate UI/domain commits and rerun reconciliation/E2E gates |
-| Installer/demo fails offline | Build and rehearse early; retain checksummed fallback evidence and last accepted installer |
+| PLAN-001–004; FND-001–007 | Contract mapping; role navigation; shared loading/empty/error/unauthorized/API-unavailable states; status badges; confirmations; keyboard/focus; persisted shell/theme preferences and responsive checks. |
+| FQ-001–004 | Remaining RHF/Zod forms and query migrations; cache invalidation after mutations; operational sorting/filtering/pagination/row actions; review pagination contract changes before rollout. |
+| AUTH-001–004 | Packaged login, forced change, lock/unlock/logout, expiry, approved idle-lock behavior and cross-role navigation. |
+| SUB-001–005; PLANM-001–003 | Subscriber identity/contact/address editing, deactivation, profile tabs, multiple services/addresses, service detail/editing, plan editing/archive and future-only pricing without changing history. |
+| BILL-001–006; LED-001–003 | Cycle/preview/finalization, invoice list/detail/statuses, controlled adjustment gates, ledger date filters and SOA opening/activity/closing reconciliation. |
+| PAY-001–009 | Fast cashier search/preview/post, stable retries, exact/partial flows, additional required methods, receipt history/reprint/void indication and compensating reversal. |
+| GC-001–005 | Approved proof entry, two-pane queue, duplicate detection, verification/rejection, independent actor rules and verified-only posting. |
+| COL-001–003; BATCH-001–006 | Areas/routes/collectors, printable route sheets, full batch lifecycle, account totals, remittance, visible differences and authorized closure. |
+| AR-001–004; SRV-001–004 | Outstanding/aging/overdue, collector/area/plan/type/age filters, overdue fields, configured policies, technician assignment and approved service history. |
+| DASH-001–002; RPT-001–009 | Compact KPIs, billing/collection and method summaries, collector performance, overdue alerts/recent payments, complete required reports and navigation-free printing. |
+| ADM-001–004 | Users, permissions, read-only audit and approved settings; effective permission changes must invalidate sessions/cache appropriately. |
+| INT-001–010; BKP-001–004; TEST-001–004; LAN work | Covered by Gates 1, 2, 5 and 6; retain their workflow evidence requirements. |
 
-## 11. Approval checkpoint
+Search must cover account/name/contact/address plus invoice, receipt and GCash reference according to permissions. Reports must cover daily/weekly/monthly/annual collections, methods, billing versus collection, revenue by plan/service/area, master list, ledger/SOA, collector assignments/remittances/performance/differences, reversals/voids and user/audit activity.
 
-No implementation phase should start until the user approves this plan. After approval, execute phases in order, update `BCIS_PROGRESS_AND_DOCUMENTATION.md` after each phase, and stop for required instructor or environment input rather than fabricating acceptance.
+Pagination currently uses nested items/page/pageSize/hasMore and inconsistent defaults. The prior integration plan proposes a data collection plus sibling meta with page/pageSize/total/totalPages, default 50 and maximum 100. Treat that as an explicit API/client migration to review and test, not an already implemented contract.
+
+Exit: policy-independent operations work through the UI with validation, authorization, persistence, audit/report effects and cross-role evidence. Re-run the vertical workflow after each migration.
+
+### Gate 4 — Written policies and required financial features
+
+Cash-only is an interim safety boundary, not final laboratory compliance. Bank Transfer, Cheque and Other are required by the activity and currently missing. GCash, advance credit and invoice adjustment/void remain gated until their detailed rules are recorded and tested.
+
+Retain these unresolved decisions from the original implementation plan:
+
+- GCash normalization/uniqueness scope, warn-versus-block, overrides, sender information, verifier separation, reject/review flow, proof types/size/storage/retention and attachment backup.
+- Advance-credit subscriber/service ownership, automatic/manual application, allocation, transfer, refunds and reporting.
+- Void/credit/adjustment authority, reasons and compensating ledger treatment; manual allocation/write-off only with explicit authority.
+- Shortage/overage approval, later settlement and batch-linked payment correction. AT-08 visibility and blocked balanced closure can be tested now without defining settlement.
+- Suspension thresholds/grace, reconnection qualification/fees, technician assignment, rejection/cancellation.
+- Number formats/scopes/resets/gaps, Asia/Manila timezone and month-end/due-day rules, tax/discount/penalty/proration only when enabled and approved.
+- Password/failed-login/idle/absolute-session thresholds, retention/access rules, report templates/branding, backup frequency/destination/retention/RTO/RPO.
+- LAN addresses/firewall/TLS or approved isolated HTTP; signing/manual-update limitations where relevant.
+
+The current billing rule uses period-end invoice dates and the configured due day in the following month, with days 1–28. This remains a documented provisional rule, not new policy approval. Proposed JPEG/PNG proof limits in archived plans are suggestions, not approved limits.
+
+Record each rule in documentation/tests, then domain/API/schema constraints, then UI, then remove only its gate. Preserve authorization before revealing record/policy state.
+
+The official activity gives the expected outcome, but not enough detail for several financial decisions. Obtain written decisions in the progress record before implementing the corresponding posting/settlement path. Work on independent required modules while waiting. **Do not mark Gate 4 or final acceptance complete while required GCash/advance/payment-method/adjustment workflows are disabled**, unless the instructor explicitly excludes them in writing.
+
+Exit: enabled required financial workflows have written rules and reconciliation/audit evidence.
+
+### Gate 5 — Recovery and automated acceptance
+
+Retain tests/Run-StaticAcceptance.ps1 as the required static gate, serialized workspace execution and single-worker API tests. Add dedicated PostgreSQL integration and Playwright Electron smoke/full workflows. Capture traces/screenshots on failure and retain separate sanitized acceptance artifacts. Introduce lint only after a reviewed configuration/script; record the activity's linting expectation meanwhile.
+
+Create and verify backups, restore into an isolated target, and compare counts/centavos/report outputs. Include attachments when proof storage is enabled. Verify consistency under concurrent writes and rollback behavior. Never rehearse over the sole retained database.
+
+Inspect `source/apps/api/src/modules/backups/backup-service.ts` and resolve D-014 so the manifest and archive represent a consistent snapshot. Record fixture creation, dump validation, isolated target identity, before/after row counts and centavo totals. Playwright Electron smoke must cover launch/login/dashboard/navigation/API-unavailable/logout; full workflow must cover the Cash vertical slice. Keep screenshots and traces only on failure except sanitized final UI evidence.
+
+Exit: static, PostgreSQL and Electron suites pass from clean documented setup; AT-12 proves restored records and financial integrity.
+
+### Gate 6 — Installer, reports and LAN
+
+Build and checksum the current source; do not assume the existing installer includes later renderer edits. Test clean Windows install/uninstall, packaged connectivity, receipt/report printing, PDF/XLSX opening, API restart and reconnect. Configure one API/database server and three distinct client accounts; desktop clients reach only the API. Record firewall scope and TLS or approved isolated-HTTP limitations.
+
+Use the approved office/LAN environment; document server and client versions/addresses without secrets. Test simultaneous operations, duplicate prevention and interrupted payment retry from real clients. Keep PostgreSQL inaccessible from desktop PCs. Confirm every required report family against database totals and representative exported files; the four existing sample families alone do not cover the activity.
+
+Exit: AT-09, clean-install, print/export and interrupted submission evidence retained; no duplicate numbering or lost value.
+
+### Gate 7 — Documentation and submission
+
+Bring demo data to the activity's recommended coverage: five users, three billing months, mixed approved payment methods/amount cases, ten overdue accounts across aging buckets, reversal and two suspension/reconnection scenarios. Existing subscriber/plan/service/collector/area counts meet their thresholds.
+
+Complete D1–D8: source/history, working release, technical guide/ERD/data dictionary/security/API/IPC/deployment/recovery, user manual, test/defect evidence, reports, screenshots and defense presentation. Produce reviewed document exports, acceptance report, release manifest/checksums and rehearse the official demo.
+
+Map CP1 architecture, CP2 core data/RBAC, CP3 financial core, CP4 collections/AR, CP5 reports/security/backup and CP6 final QA to evidence. Update the current handoff and dated evidence after each completed gate; synchronize the detailed checklist and AT matrix when their corresponding requirement or scenario status changes.
+
+Exit: all applicable requirements evidenced; no Partial, Missing or Blocked item represented as passed.
+
+## Execution safeguards and evidence
+
+Preserve existing uncommitted work. Keep feature changes reviewable; append migrations after clean/upgrade tests; use synthetic data and excluded credentials/runtime archives. Evidence records need environment, date, actor/role, commands, assertions, expected/actual values, result and artifact checksum. Sanitize exports and never include passwords, tokens, customer data or backups in Git.
+
+The activity states target volumes of 20,000 subscribers, 500,000 invoices, 500,000 payments and 1,000,000 ledger-related entries. Keep clean relational structure, relevant indexes and bounded pagination; sample representative query plans where practical. This remains a small three-PC office system, so do not add mass-use infrastructure, cloud services, microservices, mobile apps or analytics. None of those would substitute for financial and recovery correctness.
+
+For implementation rollback, use reviewed changes and isolated test data; do not reset unrelated work or rewrite applied migrations. Historical plans and verification results remain available from the documentation index.

@@ -6,7 +6,7 @@ import { app, BrowserWindow, dialog, ipcMain, shell } from "electron";
 import { getContentSecurityPolicy, getMainWindowOptions } from "./window-options.js";
 
 function createWindow(): BrowserWindow {
-  const window = new BrowserWindow(getMainWindowOptions(join(__dirname, "../preload/index.mjs")));
+  const window = new BrowserWindow(getMainWindowOptions(join(__dirname, "../preload/index.cjs")));
   const policy = getContentSecurityPolicy(process.env.BCIS_API_ORIGIN, !app.isPackaged);
   window.webContents.session.webRequest.onHeadersReceived((details, callback) => callback({ responseHeaders: { ...details.responseHeaders, "Content-Security-Policy": [policy] } }));
 

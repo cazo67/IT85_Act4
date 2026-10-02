@@ -10,7 +10,7 @@ import { AppError } from "../../app/app-error.js";
 import type { BcisDatabase } from "../../db/client.js";
 import { auditLogs, authSessions, backupRuns, invoices, ledgerEntries, payments } from "../../db/schema/index.js";
 import type { SecurityActor } from "../security-admin/security-admin-service.js";
-import { postgresEnvironment, requirePathInside, requireRestoreConfirmation } from "./backup-rules.js";
+import { financialSnapshotsMatch, postgresEnvironment, requirePathInside, requireRestoreConfirmation } from "./backup-rules.js";
 
 const executeFile = promisify(execFile);
 
@@ -96,7 +96,7 @@ export class BackupService {
     const [file, manifestText] = await Promise.all([readFile(databaseFile), readFile(manifestFile, "utf8")]);
     const manifest = JSON.parse(manifestText) as { backupId?: string; databaseBytes?: number; databaseSha256?: string; financialSnapshot?: unknown };
     const sha256 = createHash("sha256").update(file).digest("hex");
-    if (manifest.backupId !== row.id || manifest.databaseBytes !== file.byteLength || manifest.databaseSha256 !== sha256 || row.sha256 !== sha256 || JSON.stringify(manifest.financialSnapshot) !== JSON.stringify(row.financialSnapshot)) throw new AppError(409, "BACKUP_INTEGRITY_FAILED", "The backup manifest, financial snapshot, or database checksum does not match.");
+    if (manifest.backupId !== row.id || manifest.databaseBytes !== file.byteLength || manifest.databaseSha256 !== sha256 || row.sha256 !== sha256 || !financialSnapshotsMatch(manifest.financialSnapshot, row.financialSnapshot)) throw new AppError(409, "BACKUP_INTEGRITY_FAILED", "The backup manifest, financial snapshot, or database checksum does not match.");
     await run(this.config.pgRestorePath, ["--list", databaseFile], this.config.databaseUrl);
     return { databaseFile, sha256 };
   }

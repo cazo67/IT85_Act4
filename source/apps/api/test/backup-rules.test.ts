@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { expectedRestoreConfirmation, postgresEnvironment, requirePathInside, requireRestoreConfirmation } from "../src/modules/backups/backup-rules.js";
+import { expectedRestoreConfirmation, financialSnapshotsMatch, postgresEnvironment, requirePathInside, requireRestoreConfirmation } from "../src/modules/backups/backup-rules.js";
 
 describe("backup safety rules", () => {
   it("requires an exact backup-specific restore phrase", () => {
@@ -25,5 +25,13 @@ describe("backup safety rules", () => {
     expect(environment.PGDATABASE).toBe("bcis");
     expect(environment.PGSSLMODE).toBe("require");
     expect(environment.DATABASE_URL).toBeUndefined();
+  });
+
+  it("compares financial snapshots without depending on JSON object key order", () => {
+    const manifest = { invoiceCount: 61, invoiceTotalCentavos: "7963900", paymentCount: 2 };
+    const stored = { paymentCount: 2, invoiceTotalCentavos: "7963900", invoiceCount: 61 };
+
+    expect(financialSnapshotsMatch(manifest, stored)).toBe(true);
+    expect(financialSnapshotsMatch(manifest, { ...stored, paymentCount: 3 })).toBe(false);
   });
 });

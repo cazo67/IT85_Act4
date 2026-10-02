@@ -9,6 +9,7 @@ import type { BillingService } from "./billing-service.js";
 
 const id = z.string().uuid();
 const periodKey = z.string().regex(/^\d{4}-(0[1-9]|1[0-2])$/);
+const date = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
 
 export function registerBillingRoutes(app: FastifyInstance, auth: AuthService, billing: BillingService): void {
   app.get("/api/v1/billing/cycles", async (request) => {
@@ -30,7 +31,7 @@ export function registerBillingRoutes(app: FastifyInstance, auth: AuthService, b
 
   app.get("/api/v1/invoices", async (request) => {
     await authorizeRequest(auth, request, "billing.view");
-    const query = z.object({ periodKey: periodKey.optional(), subscriberId: id.optional(), page: z.coerce.number().int().positive().default(1), pageSize: z.coerce.number().int().min(1).max(100).default(25) }).parse(request.query);
+    const query = z.object({ periodKey: periodKey.optional(), subscriberId: id.optional(), invoiceNumber: z.string().trim().min(1).max(40).regex(/^[A-Za-z0-9-]+$/).optional(), page: z.coerce.number().int().positive().default(1), pageSize: z.coerce.number().int().min(1).max(100).default(25) }).parse(request.query);
     return { data: await billing.listInvoices(query) };
   });
 
@@ -42,6 +43,13 @@ export function registerBillingRoutes(app: FastifyInstance, auth: AuthService, b
   app.get("/api/v1/subscribers/:id/statement", async (request) => {
     await authorizeRequest(auth, request, "receivable.view");
     return { data: await billing.getStatement(z.object({ id }).parse(request.params).id) };
+  });
+
+  app.get("/api/v1/subscribers/:id/ledger", async (request) => {
+    await authorizeRequest(auth, request, "receivable.view");
+    const subscriberId = z.object({ id }).parse(request.params).id;
+    const query = z.object({ dateFrom: date.optional(), dateTo: date.optional(), page: z.coerce.number().int().positive().default(1), pageSize: z.coerce.number().int().min(1).max(100).default(50) }).parse(request.query);
+    return { data: await billing.listLedger(subscriberId, query) };
   });
 
   app.post("/api/v1/invoices/:id/void", async (request) => {

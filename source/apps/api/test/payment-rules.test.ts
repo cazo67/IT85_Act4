@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { allocateOldestFirst, normalizeExternalReference } from "../src/modules/payments/payment-rules.js";
+import { allocateOldestFirst, invoiceSettlementStatus, normalizeExternalReference } from "../src/modules/payments/payment-rules.js";
 
 const invoices = [
   { invoiceId: "oldest", remainingCentavos: 10_000n },
@@ -25,5 +25,12 @@ describe("payment allocation rules", () => {
 
   it("normalizes external references for future duplicate protection", () => {
     expect(normalizeExternalReference(" gcash-123 456 ")).toBe("GCASH123456");
+  });
+
+  it("distinguishes open, partial, and paid invoice settlement", () => {
+    expect(invoiceSettlementStatus(0n, 99_900n)).toBe("OPEN");
+    expect(invoiceSettlementStatus(50_000n, 99_900n)).toBe("PARTIALLY_PAID");
+    expect(invoiceSettlementStatus(99_900n, 99_900n)).toBe("PAID");
+    expect(() => invoiceSettlementStatus(100_000n, 99_900n)).toThrowError(/inconsistent/i);
   });
 });

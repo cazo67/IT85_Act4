@@ -1,11 +1,19 @@
 # Release Notes — Laboratory Candidate
 
-Version: `0.1.0` code candidate, 2026-09-22
+Version: 0.1.0 candidate. Evidence refreshed 2026-09-28; not a final accepted release.
 
-Included: secure Electron/Fastify foundation; authentication/RBAC; subscriber/service master data; billing; policy-safe cash payments and reversals; balanced collection batches; historical AR aging; controlled service actions; dashboard; four report families with PDF/XLSX; audit viewer; backup/restore safety controls; synthetic seeds; migrations `0000`–`0011`; manuals and deployment guidance.
+Implemented foundations include Electron/Fastify/PostgreSQL, auth/RBAC, subscriber/services, transactional Cash billing/payment/reversal, collections, AR/service control, four PDF/XLSX report families, audit and backup orchestration. Migrations 0000–0014 are applied to the local development and guarded test databases; 0013 adds immutable route-sheet address/current-bill/arrears snapshots for new batches while older batches remain visibly incomplete, and 0014 adds the REMITTED batch state without rewriting historic rows. Sidebar, breadcrumbs and light/dark/system themes exist; full UI acceptance remains open.
 
-Deliberately disabled pending approved rules: advance credit, GCash, invoice void/adjustment, shortage/overage approval, automatic cutoff, mandatory qualifying-payment logic, and reconnection fees.
+Latest read-only audit: 48 API + 3 Electron configuration + 4 shared tests passed, along with workspace typechecks, Drizzle consistency and source-integrity checks. The full build-producing static gate was not rerun; prior build results are historical. No fresh dependency-security audit was performed; D-009 retains its earlier findings.
 
-Local verification: 48 automated tests, workspace typecheck, API/Electron production builds, and Drizzle schema consistency pass. The dependency audit has no high or critical findings and two reviewed moderate transitive advisories recorded as D-009 in `defect-log.md`.
+Existing installer:
+- release/BCIS Subscription Billing and Collection System Setup 0.1.0.exe
+- Recorded size: 124,178,560 bytes.
+- SHA-256 rechecked during audit: 06AC0BC5158851944F2BD92EC5C7E143783D71CC8EE7C49329863DD19BE21342.
+- Clean install/uninstall is unaccepted. Do not assume it contains later UI/source changes without a new build and source manifest.
 
-This is not a production or final laboratory release. No installer, live PostgreSQL reconciliation, restore drill, installed printing, TLS/firewall evidence, or three-PC acceptance is included. Do not tag `v1.0.0-lab-submission` until every required acceptance gate is signed.
+GCash, advance credit, invoice void/adjustment and shortage settlement remain policy-gated. Bank Transfer, Cheque and Other are required but missing. Automatic cutoff, reconnection qualification/fees and detailed policies remain unresolved.
+
+Release blockers include packaged CORS, stable payment retries, session cache isolation, service-control authorization, isolated restore, complete demo/report coverage, Electron E2E, installed printing and three-PC evidence. See [defects](defect-log.md), [checklist](../BCIS_Development_Status_Checklist.md) and [acceptance](../tests/acceptance/AT-01-AT-12.md).
+
+The final-artifact check currently fails at missing screenshots; generated manuals and completed acceptance report are also absent. Do not claim final release acceptance until applicable gates have retained evidence.

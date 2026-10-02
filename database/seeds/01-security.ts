@@ -1,4 +1,4 @@
-import "dotenv/config";
+import "../scripts/load-environment.js";
 
 import { permissionCodes, type PermissionCode, type RoleCode } from "@bcis/shared";
 import { eq } from "drizzle-orm";

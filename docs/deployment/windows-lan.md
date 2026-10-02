@@ -1,6 +1,6 @@
 # Windows LAN Deployment Guide
 
-This guide describes the intended three-PC laboratory topology. It does not replace a live deployment/restore drill.
+This guide describes the intended three-PC laboratory topology. PostgreSQL 18/5433 and a local Cash workflow are evidenced; three-PC deployment and isolated restore are not accepted. The packaged file-origin CORS failure (D-010 in the defect log) must be resolved before installed-client acceptance. An NSIS artifact exists, but clean install/uninstall and current-source packaging remain open.
 
 ## Topology
 
@@ -15,13 +15,13 @@ This guide describes the intended three-PC laboratory topology. It does not repl
 3. Create separate Windows and PostgreSQL service accounts. Grant the API account access only to its application database, log directory, and `BCIS_BACKUP_ROOT`.
 4. Copy `source/apps/api/.env.example` to a protected server-only environment file. Replace every sample secret and path.
 5. Set `BCIS_API_HOST` to the server's private LAN address or `0.0.0.0`; never expose the port directly to the public Internet.
-6. Apply migrations `0000` through `0011`, then run the reviewed security and master-data seeds only for the intended environment.
+6. Apply migrations `0000` through `0014`, then run the reviewed security and master-data seeds only for the intended environment. Migration `0013` adds nullable route-sheet snapshot fields; older batches remain labelled legacy/incomplete. Migration `0014` adds the REMITTED state without rewriting older batches.
 7. Build with `corepack pnpm --dir source --filter @bcis/api build` and start through a Windows service manager using `deployment/windows/Start-BcisApi.ps1` as the reviewed launch command.
 8. Configure the service manager to restart on failure, capture stdout/stderr to a protected log directory, and rotate logs by size/time. Do not place passwords in launch arguments.
 
 ## Firewall and transport
 
-Create the inbound firewall rule only after the server address, API port, and client addresses are confirmed. Prefer TLS through a trusted reverse proxy or local certificate authority. If the laboratory explicitly accepts HTTP on an isolated LAN, document that limitation and restrict the firewall scope. Never accept PostgreSQL port 5432 from client PCs.
+Create the inbound firewall rule only after the server address, API port, and client addresses are confirmed. Prefer TLS through a trusted reverse proxy or local certificate authority. If the laboratory explicitly accepts HTTP on an isolated LAN, document that limitation and restrict the firewall scope. Never expose the PostgreSQL listener to desktop clients (local target: 5433; standard installations may use 5432).
 
 ## Client preparation
 

@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, sql } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, sql } from "drizzle-orm";
 
 import { AppError } from "../../app/app-error.js";
 import type { BcisDatabase } from "../../db/client.js";
@@ -16,7 +16,7 @@ import {
   subscribers
 } from "../../db/schema/index.js";
 import type { SecurityActor } from "../security-admin/security-admin-service.js";
-import { allocateOldestFirst } from "./payment-rules.js";
+import { allocateOldestFirst, invoiceSettlementStatus } from "./payment-rules.js";
 
 export class PaymentService {
   constructor(private readonly db: BcisDatabase) {}
@@ -67,7 +67,7 @@ export class PaymentService {
         if (!invoice) throw new Error("An allocation invoice disappeared.");
         const nextPaid = invoice.paidCentavos + allocation.amountCentavos;
         await transaction.insert(paymentAllocations).values({ paymentId: payment.id, invoiceId: invoice.id, amountCentavos: allocation.amountCentavos });
-        await transaction.update(invoices).set({ paidCentavos: nextPaid, status: nextPaid === invoice.totalCentavos ? "PAID" : "OPEN" }).where(eq(invoices.id, invoice.id));
+        await transaction.update(invoices).set({ paidCentavos: nextPaid, status: invoiceSettlementStatus(nextPaid, invoice.totalCentavos) }).where(eq(invoices.id, invoice.id));
         receiptAllocations.push({ invoiceNumber: invoice.invoiceNumber, amountCentavos: allocation.amountCentavos.toString() });
       }
 
@@ -83,8 +83,8 @@ export class PaymentService {
   }
 
   async list(input: { subscriberId?: string | undefined; page: number; pageSize: number }) {
-    const rows = await this.db.select({ payment: payments, receiptNumber: receipts.receiptNumber }).from(payments).leftJoin(receipts, eq(receipts.paymentId, payments.id)).where(input.subscriberId ? eq(payments.subscriberId, input.subscriberId) : undefined).orderBy(desc(payments.paidAt), desc(payments.paymentNumber)).limit(input.pageSize).offset((input.page - 1) * input.pageSize);
-    return { items: rows.map((row) => ({ payment: serializePayment(row.payment), receiptNumber: row.receiptNumber })), page: input.page, pageSize: input.pageSize, hasMore: rows.length === input.pageSize };
+    const rows = await this.db.select({ payment: payments, receiptNumber: receipts.receiptNumber }).from(payments).leftJoin(receipts, eq(receipts.paymentId, payments.id)).where(input.subscriberId ? eq(payments.subscriberId, input.subscriberId) : undefined).orderBy(desc(payments.paidAt), desc(payments.paymentNumber)).limit(input.pageSize + 1).offset((input.page - 1) * input.pageSize);
+    return { items: rows.slice(0, input.pageSize).map((row) => ({ payment: serializePayment(row.payment), receiptNumber: row.receiptNumber })), page: input.page, pageSize: input.pageSize, hasMore: rows.length > input.pageSize };
   }
 
   async get(paymentId: string) {
@@ -103,7 +103,7 @@ export class PaymentService {
         const [invoice] = await transaction.select().from(invoices).where(eq(invoices.id, allocation.invoiceId)).for("update").limit(1);
         if (!invoice || invoice.paidCentavos < allocation.amountCentavos) throw new AppError(409, "REVERSAL_CONFLICT", "Invoice settlement changed and the payment cannot be reversed safely.");
         const nextPaid = invoice.paidCentavos - allocation.amountCentavos;
-        await transaction.update(invoices).set({ paidCentavos: nextPaid, status: "OPEN" }).where(eq(invoices.id, invoice.id));
+        await transaction.update(invoices).set({ paidCentavos: nextPaid, status: invoiceSettlementStatus(nextPaid, invoice.totalCentavos) }).where(eq(invoices.id, invoice.id));
       }
       const reversedAt = new Date();
       await transaction.update(paymentAllocations).set({ isReversed: true, reversedAt }).where(eq(paymentAllocations.paymentId, paymentId));
@@ -118,7 +118,7 @@ export class PaymentService {
   }
 
   private openInvoices(database: Pick<BcisDatabase, "select">, subscriberId: string, lock = false, serviceAccountId?: string) {
-    const query = database.select().from(invoices).where(and(eq(invoices.subscriberId, subscriberId), eq(invoices.status, "OPEN"), serviceAccountId ? eq(invoices.serviceAccountId, serviceAccountId) : undefined)).orderBy(asc(invoices.dueDate), asc(invoices.invoiceNumber));
+    const query = database.select().from(invoices).where(and(eq(invoices.subscriberId, subscriberId), inArray(invoices.status, ["OPEN", "PARTIALLY_PAID"]), serviceAccountId ? eq(invoices.serviceAccountId, serviceAccountId) : undefined)).orderBy(asc(invoices.dueDate), asc(invoices.invoiceNumber));
     return lock && "for" in query ? query.for("update") : query;
   }
 

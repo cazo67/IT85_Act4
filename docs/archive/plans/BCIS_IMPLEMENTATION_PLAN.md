@@ -1,5 +1,7 @@
 # BCIS Subscription Billing and Collection System — Implementation Plan
 
+> Historical record archived on 2026-09-28. Original findings, dates, and task instructions below describe an earlier checkpoint; they are not current status or new execution instructions. See [current documentation](../../README.md) and the [active completion plan](../../../BCIS_COMPLETION_PLAN.md). Original code/file references are relative to the repository root unless stated otherwise.
+
 > Status: approved for phased execution; Phases 1–8 implemented and Phases 9–10 code-prepared on 2026-09-22 within documented safety boundaries (live PostgreSQL recovery, installer, three-PC, and final acceptance pending)  
 > Prepared from: `CODEX_BCIS_PLANNING_PROMPT.md` and the repository inspection on 2026-09-22  
 > Implementation gate: no application work begins until this plan is approved

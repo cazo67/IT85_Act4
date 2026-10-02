@@ -7,7 +7,7 @@ import type { SecurityActor } from "../security-admin/security-admin-service.js"
 import type { SubscriberService } from "./subscriber-service.js";
 
 const id = z.string().uuid();
-const date = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
+const date = z.string().regex(/^\d{4}-\d{2}-\d{2}$/).refine((value) => { const parsed = new Date(`${value}T00:00:00.000Z`); return !Number.isNaN(parsed.getTime()) && parsed.toISOString().slice(0, 10) === value; }, "Use a valid calendar date.");
 const centavos = z.string().regex(/^(0|[1-9]\d*)$/);
 const day = z.number().int().min(1).max(28);
 
@@ -87,6 +87,14 @@ const subscriberUpdateSchema = z.object({
   version
 });
 
+const subscriberIdentitySchema = z.object({
+  firstName: z.string().trim().min(2).max(100),
+  middleName: z.string().max(100),
+  lastName: z.string().trim().min(2).max(100),
+  suffix: z.string().max(20),
+  version
+});
+
 const serviceAccountUpdateSchema = z.object({
   planId: id,
   installationAddressId: id,
@@ -121,8 +129,8 @@ export function registerSubscriberRoutes(app: FastifyInstance, auth: AuthService
   app.patch("/api/v1/plans/:id/active", async (request, reply) => {
     const session = await authorizeRequest(auth, request, "plan.manage");
     const params = z.object({ id }).parse(request.params);
-    const body = parseBody(z.object({ isActive: z.boolean() }), request.body);
-    await service.setPlanActive(params.id, body.isActive, actor(session.id, session.user.id, request.id));
+    const body = parseBody(z.object({ isActive: z.boolean(), version: version.optional() }), request.body);
+    await service.setPlanActive(params.id, body.isActive, actor(session.id, session.user.id, request.id), body.version);
     return reply.status(204).send();
   });
 
@@ -149,6 +157,57 @@ export function registerSubscriberRoutes(app: FastifyInstance, auth: AuthService
     return reply.status(204).send();
   });
 
+  app.patch("/api/v1/subscribers/:id/identity", async (request, reply) => {
+    const session = await authorizeRequest(auth, request, "subscriber.update");
+    const params = z.object({ id }).parse(request.params);
+    await service.updateSubscriberIdentity(params.id, parseBody(subscriberIdentitySchema, request.body), actor(session.id, session.user.id, request.id));
+    return reply.status(204).send();
+  });
+
+  app.post("/api/v1/subscribers/:id/contacts", async (request) => {
+    const session = await authorizeRequest(auth, request, "subscriber.update");
+    const params = z.object({ id }).parse(request.params);
+    const body = parseBody(contactSchema.extend({ version }), request.body);
+    return { data: await service.addSubscriberContact(params.id, body, actor(session.id, session.user.id, request.id)) };
+  });
+
+  app.put("/api/v1/subscribers/:id/contacts/:contactId", async (request) => {
+    const session = await authorizeRequest(auth, request, "subscriber.update");
+    const params = z.object({ id, contactId: id }).parse(request.params);
+    const body = parseBody(contactSchema.extend({ version }), request.body);
+    return { data: await service.replaceSubscriberContact(params.id, params.contactId, body, actor(session.id, session.user.id, request.id)) };
+  });
+
+  app.patch("/api/v1/subscribers/:id/contacts/:contactId/active", async (request, reply) => {
+    const session = await authorizeRequest(auth, request, "subscriber.update");
+    const params = z.object({ id, contactId: id }).parse(request.params);
+    const body = parseBody(z.object({ version }), request.body);
+    await service.deactivateSubscriberContact(params.id, params.contactId, body.version, actor(session.id, session.user.id, request.id));
+    return reply.status(204).send();
+  });
+
+  app.post("/api/v1/subscribers/:id/addresses", async (request) => {
+    const session = await authorizeRequest(auth, request, "subscriber.update");
+    const params = z.object({ id }).parse(request.params);
+    const body = parseBody(addressSchema.extend({ version }), request.body);
+    return { data: await service.addSubscriberAddress(params.id, body, actor(session.id, session.user.id, request.id)) };
+  });
+
+  app.put("/api/v1/subscribers/:id/addresses/:addressId", async (request) => {
+    const session = await authorizeRequest(auth, request, "subscriber.update");
+    const params = z.object({ id, addressId: id }).parse(request.params);
+    const body = parseBody(addressSchema.extend({ version }), request.body);
+    return { data: await service.replaceSubscriberAddress(params.id, params.addressId, body, actor(session.id, session.user.id, request.id)) };
+  });
+
+  app.patch("/api/v1/subscribers/:id/addresses/:addressId/active", async (request, reply) => {
+    const session = await authorizeRequest(auth, request, "subscriber.update");
+    const params = z.object({ id, addressId: id }).parse(request.params);
+    const body = parseBody(z.object({ version }), request.body);
+    await service.deactivateSubscriberAddress(params.id, params.addressId, body.version, actor(session.id, session.user.id, request.id));
+    return reply.status(204).send();
+  });
+
   app.post("/api/v1/service-accounts", async (request) => {
     const session = await authorizeRequest(auth, request, "service.manage");
     return { data: await service.createServiceAccount(parseBody(serviceAccountSchema, request.body), actor(session.id, session.user.id, request.id)) };
@@ -159,6 +218,12 @@ export function registerSubscriberRoutes(app: FastifyInstance, auth: AuthService
     const params = z.object({ id }).parse(request.params);
     await service.updateServiceAccount(params.id, parseBody(serviceAccountUpdateSchema, request.body), actor(session.id, session.user.id, request.id));
     return reply.status(204).send();
+  });
+
+  app.get("/api/v1/service-accounts/:id/collector-assignments", async (request) => {
+    await authorizeRequest(auth, request, "collection.manage_routes");
+    const params = z.object({ id }).parse(request.params);
+    return { data: await service.listCollectorAssignments(params.id) };
   });
 
   app.get("/api/v1/collection-setup", async (request) => {

@@ -1,7 +1,7 @@
 [CmdletBinding()]
 param(
   [int]$ApiPort = 4100,
-  [string]$PostgresBin = "C:\Program Files\PostgreSQL\16\bin"
+  [string]$PostgresBin = ""
 )
 
 $ErrorActionPreference = "Stop"
@@ -13,6 +13,20 @@ function Add-Check([string]$Name, [bool]$Passed, [string]$Detail) {
 
 $node = Get-Command node -ErrorAction SilentlyContinue
 Add-Check "Node.js" ($null -ne $node) $(if ($node) { (node --version) } else { "Node.js 22-24 is required." })
+
+if (-not $PostgresBin) {
+  $installRoot = "C:\Program Files\PostgreSQL"
+  $supportedInstall = Get-ChildItem -LiteralPath $installRoot -Directory -ErrorAction SilentlyContinue |
+    Where-Object { $_.Name -match '^\d+$' -and [int]$_.Name -ge 16 } |
+    Sort-Object { [int]$_.Name } -Descending |
+    Select-Object -First 1
+
+  if ($supportedInstall) {
+    $PostgresBin = Join-Path $supportedInstall.FullName "bin"
+  } else {
+    $PostgresBin = Join-Path $installRoot "16\bin"
+  }
+}
 
 $pgDump = Join-Path $PostgresBin "pg_dump.exe"
 $pgRestore = Join-Path $PostgresBin "pg_restore.exe"

@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, isNull, sql } from "drizzle-orm";
+import { and, asc, desc, eq, gt, lte, ne, sql } from "drizzle-orm";
 
 import { AppError } from "../../app/app-error.js";
 import type { BcisDatabase } from "../../db/client.js";
@@ -16,6 +16,7 @@ import {
   numberSequences,
   payments,
   serviceAccounts,
+  subscriberAddresses,
   subscribers
 } from "../../db/schema/index.js";
 import { PaymentService } from "../payments/payment-service.js";
@@ -37,28 +38,34 @@ export class CollectionService {
       ]);
       if (!collector || !route) throw new AppError(400, "INVALID_COLLECTION_SETUP", "Select an active collector and route.");
       const assigned = await transaction
-        .select({ service: serviceAccounts, subscriber: subscribers })
+        .select({ service: serviceAccounts, subscriber: subscribers, address: subscriberAddresses })
         .from(collectorAssignments)
         .innerJoin(serviceAccounts, eq(collectorAssignments.serviceAccountId, serviceAccounts.id))
         .innerJoin(subscribers, eq(serviceAccounts.subscriberId, subscribers.id))
-        .where(and(eq(collectorAssignments.collectorId, input.collectorId), eq(collectorAssignments.routeId, input.routeId), isNull(collectorAssignments.effectiveTo), eq(serviceAccounts.status, "ACTIVE")))
+        .innerJoin(subscriberAddresses, eq(serviceAccounts.installationAddressId, subscriberAddresses.id))
+        .where(and(eq(collectorAssignments.collectorId, input.collectorId), eq(collectorAssignments.routeId, input.routeId), lte(collectorAssignments.effectiveFrom, input.collectionDate), sql`(${collectorAssignments.effectiveTo} is null or ${collectorAssignments.effectiveTo} > ${input.collectionDate})`, eq(serviceAccounts.status, "ACTIVE")))
         .orderBy(asc(serviceAccounts.serviceAccountNumber));
 
-      const snapshots: Array<{ service: typeof serviceAccounts.$inferSelect; subscriber: typeof subscribers.$inferSelect; expected: bigint }> = [];
+      const snapshots: Array<{ service: typeof serviceAccounts.$inferSelect; subscriber: typeof subscribers.$inferSelect; address: typeof subscriberAddresses.$inferSelect; currentBill: bigint; arrears: bigint; expected: bigint }> = [];
+      const collectionMonth = input.collectionDate.slice(0, 7);
+      const paidAsOf = sql<bigint>`coalesce((select sum(pa.amount_centavos) from payment_allocations pa inner join payments p on p.id = pa.payment_id where pa.invoice_id = ${invoices.id} and p.paid_at < (${input.collectionDate}::date + interval '1 day') and (pa.reversed_at is null or pa.reversed_at >= (${input.collectionDate}::date + interval '1 day'))), 0)`;
+      const remaining = sql<bigint>`${invoices.totalCentavos} - ${paidAsOf}`;
       for (const row of assigned) {
-        const open = await transaction.select({ total: invoices.totalCentavos, paid: invoices.paidCentavos }).from(invoices).where(and(eq(invoices.serviceAccountId, row.service.id), eq(invoices.status, "OPEN")));
-        snapshots.push({ ...row, expected: open.reduce((sum, invoice) => sum + invoice.total - invoice.paid, 0n) });
+        const open = await transaction.select({ dueDate: invoices.dueDate, remaining }).from(invoices).where(and(eq(invoices.serviceAccountId, row.service.id), ne(invoices.status, "VOID"), lte(invoices.invoiceDate, input.collectionDate), sql`${invoices.dueDate} < (${`${collectionMonth}-01`}::date + interval '1 month')`, gt(remaining, 0n)));
+        const currentBill = open.reduce((sum, invoice) => sum + (invoice.dueDate.slice(0, 7) === collectionMonth ? BigInt(invoice.remaining) : 0n), 0n);
+        const arrears = open.reduce((sum, invoice) => sum + (invoice.dueDate.slice(0, 7) < collectionMonth ? BigInt(invoice.remaining) : 0n), 0n);
+        snapshots.push({ ...row, currentBill, arrears, expected: currentBill + arrears });
       }
       const expected = snapshots.reduce((sum, row) => sum + row.expected, 0n);
       const batchNumber = `BAT-${input.collectionDate.replaceAll("-", "")}-${(await nextSequence(transaction, "COLLECTION_BATCH")).toString().padStart(6, "0")}`;
       const [batch] = await transaction.insert(collectionBatches).values({ batchNumber, collectorId: input.collectorId, routeId: input.routeId, collectionDate: input.collectionDate, expectedCashCentavos: expected, createdBy: actor.userId }).returning();
       if (!batch) throw new Error("The collection batch could not be created.");
       if (snapshots.length > 0) {
-        await transaction.insert(collectionBatchAccounts).values(snapshots.map((row) => ({ batchId: batch.id, serviceAccountId: row.service.id, subscriberId: row.subscriber.id, accountNumberSnapshot: row.subscriber.accountNumber, subscriberNameSnapshot: `${row.subscriber.firstName} ${row.subscriber.lastName}`, serviceNumberSnapshot: row.service.serviceAccountNumber, expectedCentavos: row.expected })));
+        await transaction.insert(collectionBatchAccounts).values(snapshots.map((row) => ({ batchId: batch.id, serviceAccountId: row.service.id, subscriberId: row.subscriber.id, accountNumberSnapshot: row.subscriber.accountNumber, subscriberNameSnapshot: `${row.subscriber.firstName} ${row.subscriber.lastName}`, serviceNumberSnapshot: row.service.serviceAccountNumber, addressSnapshot: [row.address.line1, row.address.line2, row.address.barangay, row.address.cityMunicipality, row.address.province, row.address.postalCode].filter(Boolean).join(", "), currentBillCentavosSnapshot: row.currentBill, arrearsCentavosSnapshot: row.arrears, expectedCentavos: row.expected })));
       }
       await audit(transaction, actor, "collection_batch.create", batch.id, { batchNumber, collectorId: input.collectorId, routeId: input.routeId, accountCount: snapshots.length, expectedCashCentavos: expected.toString() });
       return serializeBatch(batch);
-    });
+    }, { isolationLevel: "repeatable read" });
   }
 
   async listBatches() {
@@ -67,15 +74,25 @@ export class CollectionService {
   }
 
   async getBatch(batchId: string) {
-    const [batch] = await this.db.select().from(collectionBatches).where(eq(collectionBatches.id, batchId)).limit(1);
-    if (!batch) throw new AppError(404, "COLLECTION_BATCH_NOT_FOUND", "The collection batch was not found.");
-    const [accounts, entries, remittance, reconciliation] = await Promise.all([
-      this.db.select().from(collectionBatchAccounts).where(eq(collectionBatchAccounts.batchId, batchId)).orderBy(asc(collectionBatchAccounts.accountNumberSnapshot), asc(collectionBatchAccounts.serviceNumberSnapshot)),
-      this.db.select().from(batchCollectionEntries).where(eq(batchCollectionEntries.batchId, batchId)).orderBy(asc(batchCollectionEntries.recordedAt)),
-      this.db.select().from(collectorRemittances).where(eq(collectorRemittances.batchId, batchId)).limit(1),
-      this.db.select().from(batchReconciliations).where(eq(batchReconciliations.batchId, batchId)).limit(1)
-    ]);
-    return { batch: serializeBatch(batch), accounts: accounts.map(serializeAccount), entries: entries.map((entry) => ({ ...entry, amountCentavos: entry.amountCentavos.toString() })), remittance: remittance[0] ? serializeRemittance(remittance[0]) : null, reconciliation: reconciliation[0] ? serializeReconciliation(reconciliation[0]) : null };
+    return this.db.transaction(async (transaction) => {
+      const [batch] = await transaction.select().from(collectionBatches).where(eq(collectionBatches.id, batchId)).limit(1);
+      if (!batch) throw new AppError(404, "COLLECTION_BATCH_NOT_FOUND", "The collection batch was not found.");
+      const accounts = await transaction.select().from(collectionBatchAccounts).where(eq(collectionBatchAccounts.batchId, batchId)).orderBy(asc(collectionBatchAccounts.accountNumberSnapshot), asc(collectionBatchAccounts.serviceNumberSnapshot));
+      const entries = await transaction.select().from(batchCollectionEntries).where(eq(batchCollectionEntries.batchId, batchId)).orderBy(asc(batchCollectionEntries.recordedAt));
+      const remittance = await transaction.select().from(collectorRemittances).where(eq(collectorRemittances.batchId, batchId)).limit(1);
+      const reconciliation = await transaction.select().from(batchReconciliations).where(eq(batchReconciliations.batchId, batchId)).limit(1);
+      const expectedFromAccounts = accounts.reduce((sum, account) => sum + account.expectedCentavos, 0n);
+      const collectedFromAccounts = accounts.reduce((sum, account) => sum + account.collectedCentavos, 0n);
+      const summary = {
+        accountCount: accounts.length,
+        pendingCount: accounts.filter((account) => account.status === "PENDING").length,
+        partialCount: accounts.filter((account) => account.status === "PARTIAL").length,
+        collectedCount: accounts.filter((account) => account.status === "COLLECTED").length,
+        uncollectedCentavos: (expectedFromAccounts - collectedFromAccounts).toString(),
+        totalsMatch: expectedFromAccounts === batch.expectedCashCentavos && collectedFromAccounts === batch.collectedCashCentavos
+      };
+      return { batch: serializeBatch(batch), summary, accounts: accounts.map(serializeAccount), entries: entries.map((entry) => ({ ...entry, amountCentavos: entry.amountCentavos.toString() })), remittance: remittance[0] ? serializeRemittance(remittance[0]) : null, reconciliation: reconciliation[0] ? serializeReconciliation(reconciliation[0]) : null };
+    }, { isolationLevel: "repeatable read" });
   }
 
   async transition(batchId: string, to: "ACTIVE" | "SUBMITTED" | "CLOSED", version: number, actor: SecurityActor): Promise<void> {
@@ -130,7 +147,7 @@ export class CollectionService {
       const remittanceNumber = `REM-${(await nextSequence(transaction, "REMITTANCE")).toString().padStart(8, "0")}`;
       const [created] = await transaction.insert(collectorRemittances).values({ remittanceNumber, batchId, remittedCashCentavos: remitted, differenceCentavos: difference, notes: input.notes.trim(), remittedBy: actor.userId }).returning();
       if (!created) throw new Error("The remittance could not be created.");
-      await transaction.update(collectionBatches).set({ remittedCashCentavos: remitted, differenceCentavos: difference, version: sql`${collectionBatches.version} + 1`, updatedAt: new Date() }).where(eq(collectionBatches.id, batchId));
+      await transaction.update(collectionBatches).set({ status: "REMITTED", remittedCashCentavos: remitted, differenceCentavos: difference, version: sql`${collectionBatches.version} + 1`, updatedAt: new Date() }).where(eq(collectionBatches.id, batchId));
       await audit(transaction, actor, "collection_batch.remit", batchId, { remittanceNumber, remittedCashCentavos: remitted.toString(), differenceCentavos: difference.toString() });
       return serializeRemittance(created);
     });
@@ -156,6 +173,6 @@ type CollectionTransaction = Parameters<Parameters<BcisDatabase["transaction"]>[
 async function nextSequence(transaction: CollectionTransaction, code: string): Promise<bigint> { const [row] = await transaction.insert(numberSequences).values({ code, lastValue: 1n }).onConflictDoUpdate({ target: numberSequences.code, set: { lastValue: sql`${numberSequences.lastValue} + 1`, updatedAt: new Date() } }).returning({ value: numberSequences.lastValue }); if (!row) throw new Error(`${code} number generation failed.`); return row.value; }
 async function audit(transaction: CollectionTransaction, actor: SecurityActor, action: string, entityId: string, afterValues: Record<string, unknown>) { await transaction.insert(auditLogs).values({ actorUserId: actor.userId, actorSessionId: actor.sessionId, action, entityType: "collection_batch", entityId, requestId: actor.requestId ?? null, afterValues }); }
 function serializeBatch(row: typeof collectionBatches.$inferSelect) { return { ...row, expectedCashCentavos: row.expectedCashCentavos.toString(), collectedCashCentavos: row.collectedCashCentavos.toString(), nonCashCentavos: row.nonCashCentavos.toString(), remittedCashCentavos: row.remittedCashCentavos.toString(), differenceCentavos: row.differenceCentavos.toString() }; }
-function serializeAccount(row: typeof collectionBatchAccounts.$inferSelect) { return { ...row, expectedCentavos: row.expectedCentavos.toString(), collectedCentavos: row.collectedCentavos.toString() }; }
+function serializeAccount(row: typeof collectionBatchAccounts.$inferSelect) { return { ...row, currentBillCentavosSnapshot: row.currentBillCentavosSnapshot?.toString() ?? null, arrearsCentavosSnapshot: row.arrearsCentavosSnapshot?.toString() ?? null, expectedCentavos: row.expectedCentavos.toString(), collectedCentavos: row.collectedCentavos.toString() }; }
 function serializeRemittance(row: typeof collectorRemittances.$inferSelect) { return { ...row, remittedCashCentavos: row.remittedCashCentavos.toString(), differenceCentavos: row.differenceCentavos.toString() }; }
 function serializeReconciliation(row: typeof batchReconciliations.$inferSelect) { return { ...row, expectedCentavos: row.expectedCentavos.toString(), collectedCashCentavos: row.collectedCashCentavos.toString(), remittedCashCentavos: row.remittedCashCentavos.toString(), nonCashCentavos: row.nonCashCentavos.toString(), differenceCentavos: row.differenceCentavos.toString() }; }

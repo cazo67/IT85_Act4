@@ -7,14 +7,15 @@
     "node": ">=22 <25"
   },
   "scripts": {
-    "build": "corepack pnpm -r --if-present build",
+    "build": "corepack pnpm --workspace-concurrency=1 -r --if-present build",
     "check": "corepack pnpm typecheck && corepack pnpm test && corepack pnpm build",
     "dev:api": "corepack pnpm --filter @bcis/api dev",
     "dev:desktop": "corepack pnpm --filter @bcis/desktop dev",
+    "db:migrate": "corepack pnpm --filter @bcis/database-tools migrate",
     "db:seed-security": "corepack pnpm --filter @bcis/database-tools seed:security",
     "db:seed-master-data": "corepack pnpm --filter @bcis/database-tools seed:master-data",
-    "test": "corepack pnpm -r --if-present test",
-    "typecheck": "corepack pnpm -r --if-present typecheck"
+    "test": "corepack pnpm --workspace-concurrency=1 -r --if-present test",
+    "typecheck": "corepack pnpm --workspace-concurrency=1 -r --if-present typecheck"
   },
   "devDependencies": {
     "@types/node": "^24.10.0",

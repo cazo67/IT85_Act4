@@ -47,7 +47,10 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
   });
 
   await app.register(cors, {
+    methods: ["GET", "HEAD", "POST", "PUT", "PATCH"],
     origin(origin, callback) {
+      // Electron's packaged file:// renderer sends the opaque Origin "null".
+      // Accept it only when the server operator lists "null" explicitly.
       if (!origin || options.allowedOrigins.includes(origin)) {
         callback(null, true);
         return;

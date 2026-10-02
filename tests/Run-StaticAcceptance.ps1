@@ -6,6 +6,8 @@ function Assert-NativeSuccess([string]$Step) {
   }
 }
 
+& (Join-Path $PSScriptRoot "Test-SubmissionReadiness.ps1")
+
 corepack pnpm --dir source typecheck
 Assert-NativeSuccess "Workspace typecheck"
 corepack pnpm --dir source --filter "@bcis/api" test

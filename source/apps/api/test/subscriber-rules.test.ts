@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { AppError } from "../src/app/app-error.js";
-import { normalizeContact, normalizeSearch, serviceStatusEventType, validatePlanFields, validateServiceTransition } from "../src/modules/subscribers/subscriber-service.js";
+import { normalizeContact, normalizeSearch, serviceStatusEventType, validateGenericServiceUpdate, validatePlanFields, validateServiceTransition } from "../src/modules/subscribers/subscriber-service.js";
 
 describe("subscriber and plan rules", () => {
   it("normalizes search text and contact numbers consistently", () => {
@@ -27,5 +27,15 @@ describe("subscriber and plan rules", () => {
   it("distinguishes first activation from reconnection", () => {
     expect(serviceStatusEventType("PENDING", "ACTIVE")).toBe("ACTIVATED");
     expect(serviceStatusEventType("SUSPENDED", "ACTIVE")).toBe("RECONNECTED");
+  });
+
+  it("blocks direct suspension, reconnection, and disconnection while allowing ordinary edits", () => {
+    expect(() => validateGenericServiceUpdate("ACTIVE", "SUSPENDED")).toThrowError(/approved service-control workflow/);
+    expect(() => validateGenericServiceUpdate("SUSPENDED", "ACTIVE")).toThrowError(/approved service-control workflow/);
+    expect(() => validateGenericServiceUpdate("ACTIVE", "DISCONNECTED")).toThrowError(/disconnection remains unavailable/);
+    expect(() => validateGenericServiceUpdate("DISCONNECTED", "ACTIVE")).toThrowError(/approved service-control workflow/);
+    expect(() => validateGenericServiceUpdate("ACTIVE", "ACTIVE")).not.toThrow();
+    expect(() => validateGenericServiceUpdate("PENDING", "ACTIVE")).not.toThrow();
+    expect(() => validateGenericServiceUpdate("ACTIVE", "TERMINATED")).not.toThrow();
   });
 });

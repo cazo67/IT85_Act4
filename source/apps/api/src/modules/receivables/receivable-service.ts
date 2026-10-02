@@ -1,14 +1,19 @@
-import { and, asc, desc, eq, gt, lte, ne, sql } from "drizzle-orm";
+import { and, asc, desc, eq, gt, ilike, lte, ne, or, sql } from "drizzle-orm";
 
 import { AppError } from "../../app/app-error.js";
 import type { BcisDatabase } from "../../db/client.js";
 import {
   auditLogs,
+  billingCycles,
+  collectionAreas,
+  collectors,
   invoices,
   payments,
   reconnectionRecords,
   serviceAccounts,
   serviceEvents,
+  servicePlans,
+  serviceTypes,
   subscribers,
   suspensionRecords
 } from "../../db/schema/index.js";
@@ -18,11 +23,72 @@ import { requireIndependentActor, validateServiceControlTransition } from "./rec
 export class ReceivableService {
   constructor(private readonly db: BcisDatabase) {}
 
-  async list(input: { asOf: string; overdueOnly: boolean; page: number; pageSize: number }) {
+  async overdueAccounts(input: { asOf: string; page: number; pageSize: number; search?: string | undefined; bucket?: "CURRENT" | "DAYS_1_30" | "DAYS_31_60" | "DAYS_61_90" | "DAYS_91_PLUS" | undefined; areaId?: string | undefined; collectorId?: string | undefined; planId?: string | undefined; serviceTypeId?: string | undefined }) {
+    const remaining = remainingAsOf(input.asOf);
+    const conditions = [ne(invoices.status, "VOID"), gt(remaining, 0n), lte(invoices.invoiceDate, input.asOf), sql`${invoices.dueDate} < ${input.asOf}::date`];
+    if (input.search) {
+      const pattern = `%${input.search.trim().replace(/[\\%_]/g, "\\$&")}%`;
+      conditions.push(or(ilike(subscribers.accountNumber, pattern), ilike(subscribers.firstName, pattern), ilike(subscribers.lastName, pattern), ilike(sql<string>`${subscribers.firstName} || ' ' || ${subscribers.lastName}`, pattern), ilike(invoices.invoiceNumber, pattern), ilike(serviceAccounts.serviceAccountNumber, pattern))!);
+    }
+    if (input.areaId) conditions.push(eq(subscribers.collectionAreaId, input.areaId));
+    if (input.collectorId) conditions.push(sql`coalesce(${serviceAccounts.assignedCollectorId}, ${subscribers.assignedCollectorId}) = ${input.collectorId}::uuid`);
+    if (input.planId) conditions.push(eq(servicePlans.id, input.planId));
+    if (input.serviceTypeId) conditions.push(eq(servicePlans.serviceTypeId, input.serviceTypeId));
+    const ageDays = sql`(${input.asOf}::date - ${invoices.dueDate})`;
+    if (input.bucket === "CURRENT") conditions.push(sql`${ageDays} <= 0`);
+    if (input.bucket === "DAYS_1_30") conditions.push(sql`${ageDays} between 1 and 30`);
+    if (input.bucket === "DAYS_31_60") conditions.push(sql`${ageDays} between 31 and 60`);
+    if (input.bucket === "DAYS_61_90") conditions.push(sql`${ageDays} between 61 and 90`);
+    if (input.bucket === "DAYS_91_PLUS") conditions.push(sql`${ageDays} >= 91`);
+    const rows = await this.db.select({
+      subscriberId: subscribers.id,
+      accountNumber: subscribers.accountNumber,
+      subscriberName: sql<string>`${subscribers.firstName} || ' ' || ${subscribers.lastName}`,
+      serviceAccountId: serviceAccounts.id,
+      serviceAccountNumber: serviceAccounts.serviceAccountNumber,
+      serviceStatus: serviceAccounts.status,
+      areaName: collectionAreas.name,
+      collectorName: collectors.displayName,
+      monthsUnpaid: sql<number>`count(distinct ${billingCycles.periodKey})::integer`,
+      overdueInvoiceCount: sql<number>`count(${invoices.id})::integer`,
+      oldestUnpaidInvoice: sql<string>`(array_agg(${invoices.invoiceNumber} order by ${invoices.dueDate}, ${invoices.invoiceNumber}))[1]`,
+      oldestDueDate: sql<string>`min(${invoices.dueDate})`,
+      maximumDaysPastDue: sql<number>`max(${ageDays})::integer`,
+      totalArrearsCentavos: sql<bigint>`sum(${remaining})`,
+      lastPaymentAt: sql<string | null>`(select max(p.paid_at)::text from payments p where p.subscriber_id = ${subscribers.id} and p.paid_at < (${input.asOf}::date + interval '1 day') and (p.reversed_at is null or p.reversed_at >= (${input.asOf}::date + interval '1 day')))`
+    }).from(invoices)
+      .innerJoin(billingCycles, eq(invoices.billingCycleId, billingCycles.id))
+      .innerJoin(subscribers, eq(invoices.subscriberId, subscribers.id))
+      .innerJoin(serviceAccounts, eq(invoices.serviceAccountId, serviceAccounts.id))
+      .innerJoin(servicePlans, eq(invoices.planCodeSnapshot, servicePlans.code))
+      .leftJoin(collectionAreas, eq(subscribers.collectionAreaId, collectionAreas.id))
+      .leftJoin(collectors, sql`${collectors.id} = coalesce(${serviceAccounts.assignedCollectorId}, ${subscribers.assignedCollectorId})`)
+      .where(and(...conditions))
+      .groupBy(subscribers.id, serviceAccounts.id, collectionAreas.id, collectors.id)
+      .orderBy(asc(sql`min(${invoices.dueDate})`), asc(serviceAccounts.serviceAccountNumber))
+      .limit(input.pageSize + 1).offset((input.page - 1) * input.pageSize);
+    return { items: rows.slice(0, input.pageSize).map((row) => ({ ...row, totalArrearsCentavos: money(row.totalArrearsCentavos) })), page: input.page, pageSize: input.pageSize, hasMore: rows.length > input.pageSize };
+  }
+
+  async list(input: { asOf: string; overdueOnly: boolean; page: number; pageSize: number; search?: string | undefined; bucket?: "CURRENT" | "DAYS_1_30" | "DAYS_31_60" | "DAYS_61_90" | "DAYS_91_PLUS" | undefined; areaId?: string | undefined; collectorId?: string | undefined; planId?: string | undefined; serviceTypeId?: string | undefined }) {
     const paid = paidAsOf(input.asOf);
     const remaining = remainingAsOf(input.asOf);
     const conditions = [ne(invoices.status, "VOID"), gt(remaining, 0n), lte(invoices.invoiceDate, input.asOf)];
     if (input.overdueOnly) conditions.push(sql`${invoices.dueDate} < ${input.asOf}::date`);
+    if (input.search) {
+      const pattern = `%${input.search.trim().replace(/[\\%_]/g, "\\$&")}%`;
+      conditions.push(or(ilike(subscribers.accountNumber, pattern), ilike(subscribers.firstName, pattern), ilike(subscribers.lastName, pattern), ilike(sql<string>`${subscribers.firstName} || ' ' || ${subscribers.lastName}`, pattern), ilike(invoices.invoiceNumber, pattern), ilike(serviceAccounts.serviceAccountNumber, pattern))!);
+    }
+    if (input.areaId) conditions.push(eq(subscribers.collectionAreaId, input.areaId));
+    if (input.collectorId) conditions.push(sql`coalesce(${serviceAccounts.assignedCollectorId}, ${subscribers.assignedCollectorId}) = ${input.collectorId}::uuid`);
+    if (input.planId) conditions.push(eq(servicePlans.id, input.planId));
+    if (input.serviceTypeId) conditions.push(eq(servicePlans.serviceTypeId, input.serviceTypeId));
+    const ageDays = sql`(${input.asOf}::date - ${invoices.dueDate})`;
+    if (input.bucket === "CURRENT") conditions.push(sql`${ageDays} <= 0`);
+    if (input.bucket === "DAYS_1_30") conditions.push(sql`${ageDays} between 1 and 30`);
+    if (input.bucket === "DAYS_31_60") conditions.push(sql`${ageDays} between 31 and 60`);
+    if (input.bucket === "DAYS_61_90") conditions.push(sql`${ageDays} between 61 and 90`);
+    if (input.bucket === "DAYS_91_PLUS") conditions.push(sql`${ageDays} >= 91`);
     const rows = await this.db
       .select({
         invoiceId: invoices.id,
@@ -38,21 +104,42 @@ export class ReceivableService {
         serviceAccountId: serviceAccounts.id,
         serviceAccountNumber: serviceAccounts.serviceAccountNumber,
         serviceStatus: serviceAccounts.status,
-        daysPastDue: sql<number>`greatest((${input.asOf}::date - ${invoices.dueDate}), 0)`
+        planCode: invoices.planCodeSnapshot,
+        planName: invoices.planNameSnapshot,
+        serviceTypeCode: serviceTypes.code,
+        serviceTypeName: serviceTypes.name,
+        areaName: collectionAreas.name,
+        collectorName: collectors.displayName,
+        daysPastDue: sql<number>`greatest((${input.asOf}::date - ${invoices.dueDate}), 0)`,
+        lastPaymentAt: sql<string | null>`(select max(p.paid_at)::text from payments p where p.subscriber_id = ${subscribers.id} and p.paid_at < (${input.asOf}::date + interval '1 day') and (p.reversed_at is null or p.reversed_at >= (${input.asOf}::date + interval '1 day')))`
       })
       .from(invoices)
       .innerJoin(subscribers, eq(invoices.subscriberId, subscribers.id))
       .innerJoin(serviceAccounts, eq(invoices.serviceAccountId, serviceAccounts.id))
+      .innerJoin(servicePlans, eq(invoices.planCodeSnapshot, servicePlans.code))
+      .innerJoin(serviceTypes, eq(servicePlans.serviceTypeId, serviceTypes.id))
+      .leftJoin(collectionAreas, eq(subscribers.collectionAreaId, collectionAreas.id))
+      .leftJoin(collectors, sql`${collectors.id} = coalesce(${serviceAccounts.assignedCollectorId}, ${subscribers.assignedCollectorId})`)
       .where(and(...conditions))
       .orderBy(asc(invoices.dueDate), asc(invoices.invoiceNumber))
       .limit(input.pageSize + 1)
       .offset((input.page - 1) * input.pageSize);
     return {
-      items: rows.slice(0, input.pageSize).map((row) => ({ ...row, totalCentavos: money(row.totalCentavos), paidCentavos: money(row.paidCentavos), remainingCentavos: money(row.remainingCentavos) })),
+      items: rows.slice(0, input.pageSize).map((row) => ({ ...row, ageBucket: row.daysPastDue === 0 ? "CURRENT" : row.daysPastDue <= 30 ? "DAYS_1_30" : row.daysPastDue <= 60 ? "DAYS_31_60" : row.daysPastDue <= 90 ? "DAYS_61_90" : "DAYS_91_PLUS", totalCentavos: money(row.totalCentavos), paidCentavos: money(row.paidCentavos), remainingCentavos: money(row.remainingCentavos) })),
       page: input.page,
       pageSize: input.pageSize,
       hasMore: rows.length > input.pageSize
     };
+  }
+
+  async filterOptions() {
+    const [areas, collectorRows, plans, types] = await Promise.all([
+      this.db.select({ id: collectionAreas.id, name: collectionAreas.name }).from(collectionAreas).orderBy(asc(collectionAreas.name)),
+      this.db.select({ id: collectors.id, name: collectors.displayName }).from(collectors).orderBy(asc(collectors.displayName)),
+      this.db.select({ id: servicePlans.id, name: servicePlans.name, code: servicePlans.code }).from(servicePlans).orderBy(asc(servicePlans.code)),
+      this.db.select({ id: serviceTypes.id, name: serviceTypes.name, code: serviceTypes.code }).from(serviceTypes).orderBy(asc(serviceTypes.code))
+    ]);
+    return { areas, collectors: collectorRows, plans, serviceTypes: types };
   }
 
   async aging(asOf: string) {

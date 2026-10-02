@@ -4,6 +4,7 @@
   "private": true,
   "type": "module",
   "scripts": {
+    "migrate": "tsx scripts/migrate.ts",
     "seed:security": "tsx seeds/01-security.ts",
     "seed:master-data": "tsx seeds/02-master-data.ts",
     "typecheck": "tsc -p tsconfig.json --noEmit"

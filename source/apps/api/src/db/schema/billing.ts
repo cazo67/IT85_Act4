@@ -5,7 +5,7 @@ import { users } from "./security.js";
 import { serviceAccounts, subscribers } from "./subscribers.js";
 
 export const billingCycleStatus = pgEnum("billing_cycle_status", ["DRAFT", "FINALIZED"]);
-export const invoiceStatus = pgEnum("invoice_status", ["OPEN", "PAID", "VOID"]);
+export const invoiceStatus = pgEnum("invoice_status", ["OPEN", "PARTIALLY_PAID", "PAID", "VOID"]);
 export const invoiceItemType = pgEnum("invoice_item_type", ["PLAN_SERVICE", "ADJUSTMENT"]);
 
 export const billingCycles = pgTable("billing_cycles", {

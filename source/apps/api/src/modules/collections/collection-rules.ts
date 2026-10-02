@@ -1,12 +1,13 @@
 import { AppError } from "../../app/app-error.js";
 
-export type BatchStatus = "DRAFT" | "ACTIVE" | "SUBMITTED" | "RECONCILED" | "CLOSED";
+export type BatchStatus = "DRAFT" | "ACTIVE" | "SUBMITTED" | "REMITTED" | "RECONCILED" | "CLOSED";
 
 export function validateBatchTransition(from: BatchStatus, to: BatchStatus): void {
   const allowed: Record<BatchStatus, readonly BatchStatus[]> = {
     DRAFT: ["ACTIVE"],
     ACTIVE: ["SUBMITTED"],
-    SUBMITTED: ["RECONCILED"],
+    SUBMITTED: ["REMITTED", "RECONCILED"], // Legacy submitted batches can already contain a remittance.
+    REMITTED: ["RECONCILED"],
     RECONCILED: ["CLOSED"],
     CLOSED: []
   };

@@ -1,46 +1,50 @@
 # BCIS Subscription Billing and Collection System
 
-BCIS is a desktop billing and collection system planned for three office PCs. Electron clients communicate with one Fastify API, and only the API can access PostgreSQL or server-managed files.
+BCIS targets three Windows Electron clients connected to one Fastify API and PostgreSQL server. Only the server accesses the database.
 
-## Current checkpoint
+## Current status
 
-Phases 1 through 8 are implemented at code level, Phase 9 backup/deployment controls are code-prepared, and Phase 10 documentation and static QA are prepared within documented safety boundaries. The repository provides authentication and RBAC, subscriber/service master data, transactional billing and payments, receipts/reversals, route batches, historical AR aging, controlled service actions, dashboard/reports, PDF/XLSX exports, an audit viewer, verified-backup orchestration, restore safety controls, and Windows LAN guidance. Policy-blocked financial features remain disabled. This is a release candidate, not a final accepted release: live PostgreSQL recovery, completed NSIS packaging, installed printing, and three-PC acceptance are pending.
+Partial; not finally accepted. The 2026-09-28 audit confirmed PostgreSQL 18/5433, API readiness, 13 applied migrations, a persisted Cash/reversal slice and 55 passing automated tests. A backup and NSIS artifact exist. Policy-dependent features, isolated restore, clean installation, printing, complete demo data and three-PC acceptance remain open. Packaged-origin CORS and other reliability findings are recorded in the [defect log](docs/defect-log.md).
 
-## Prerequisites
+For implementation across sessions, use only the [approved phased plan](BCIS_COMPLETION_PLAN.md) and the [current handoff/progress record](BCIS_PROGRESS_AND_DOCUMENTATION.md). The [official activity](BCIS_Subscription_Billing_and_Collection_Laboratory_Activity.md) defines the required features; the [detailed checklist](BCIS_Development_Status_Checklist.md) is a supporting reference. Historical phase numbers are not completion claims.
 
-- Node.js 24 (Node 22 LTS is also supported by the project policy)
-- Corepack
-- PostgreSQL 16 or newer for live database readiness
+## Prerequisites and setup
 
-The current machine does not have PostgreSQL installed. Automated tests do not require a live database, but `/api/v1/health/ready` will report unavailable until `DATABASE_URL` is configured and reachable. Commands invoke pnpm through Corepack, so a system-wide pnpm installation is not required.
+Node.js 22–24 under the current project policy, Corepack, and PostgreSQL 16+ are required. The current local integration target is PostgreSQL 18 on port 5433; the API uses 4100.
 
-## Setup
+On a fresh checkout only, copy each .env.example to its corresponding .env if that file does not already exist. Preserve existing local configuration. Configure server-only database/bootstrap secrets privately; keep PostgreSQL administrator, application role and BCIS owner passwords separate.
 
 ```powershell
-Copy-Item source/apps/api/.env.example source/apps/api/.env
-Copy-Item source/apps/desktop/.env.example source/apps/desktop/.env
 corepack pnpm --dir source install
-corepack pnpm --dir source check
 ```
 
-Run the API and desktop in separate terminals:
+Follow [database preparation](database/README.md) to migrate and seed the intended synthetic environment. Do not run seeds against production/customer data.
+
+Run in separate terminals:
 
 ```powershell
 corepack pnpm --dir source dev:api
 corepack pnpm --dir source dev:desktop
 ```
 
-The default API URL is `http://127.0.0.1:4100`. For another LAN PC, set the desktop URL to the server PC's LAN address and configure the API host/firewall deliberately.
+Only one API process can listen on 127.0.0.1:4100. EADDRINUSE means another process already owns that address; inspect it and health endpoints before starting another instance.
 
-## Workspace
+The desktop defaults to http://127.0.0.1:4100. LAN clients need the server's approved API address and matching desktop/CSP/server-origin configuration; see [deployment](docs/deployment/windows-lan.md). The current packaged client is not yet accepted.
 
-- `source/apps/desktop` — Electron main, preload, and React renderer.
-- `source/apps/api` — Fastify API, server-only configuration, and PostgreSQL readiness.
-- `source/packages/shared` — safe public contracts and serialization helpers.
-- `database` — reviewed migrations and synthetic seeds when their phases begin.
-- `docs` — architecture, deployment, technical, and user documentation.
-- `tests` — acceptance procedures and evidence.
+## Verification and navigation
 
-See `BCIS_IMPLEMENTATION_PLAN.md` for the approved phased roadmap and unresolved instructor decisions. Documentation navigation is in `docs/README.md`; test and acceptance navigation is in `tests/README.md`.
+```powershell
+& .\tests\Run-StaticAcceptance.ps1
+```
 
-Checkpoint evidence is documented under `docs/architecture/phase-1-verification.md` through `docs/architecture/phase-10-verification.md`. Sanitized PDF/XLSX examples are under `reports-samples/`; Windows deployment guidance is under `docs/deployment/`.
+This required static gate includes builds and does not replace PostgreSQL integration, Electron E2E, restore, installer, printing or three-PC evidence.
+
+- [Documentation index](docs/README.md): active guides, ownership and archive inventory.
+- [Test guide](tests/README.md) and [AT-01–AT-12](tests/acceptance/AT-01-AT-12.md).
+- [Synthetic report samples](reports-samples/README.md).
+- source/apps/desktop: main/preload and renderer.
+- source/apps/api: API, domain modules and schema.
+- source/packages/shared: safe contracts and serialization.
+- database: migrations 0000–0014, controlled migration script and synthetic seeds; 0013 adds route-sheet snapshots and 0014 adds the REMITTED batch state. Apply both before using the updated collection-batch workflow.
+
+Archived prompts and phase results under docs/archive/ are historical evidence, not active execution instructions.

@@ -1,5 +1,7 @@
 # CODEX_BCIS_PLANNING_PROMPT.md
 
+> Historical record archived on 2026-09-28. Original findings, dates, and task instructions below describe an earlier checkpoint; they are not current status or new execution instructions. See [current documentation](../../README.md) and the [active completion plan](../../../BCIS_COMPLETION_PLAN.md). Original code/file references are relative to the repository root unless stated otherwise.
+
 > **Purpose:** Give this file to Codex inside a **new BCIS project**.
 >
 > **Mode:** PLANNING ONLY. Codex must inspect the actual repository first and create `BCIS_IMPLEMENTATION_PLAN.md`. It must not implement the system yet.

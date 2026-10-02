@@ -1,0 +1,1 @@
+ALTER TYPE "public"."collection_batch_status" ADD VALUE 'REMITTED';

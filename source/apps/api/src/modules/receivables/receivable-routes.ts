@@ -7,15 +7,24 @@ import type { SecurityActor } from "../security-admin/security-admin-service.js"
 import type { ReceivableService } from "./receivable-service.js";
 
 const id = z.string().uuid();
-const date = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
+const date = z.string().regex(/^\d{4}-\d{2}-\d{2}$/).refine((value) => { const parsed = new Date(`${value}T00:00:00.000Z`); return !Number.isNaN(parsed.getTime()) && parsed.toISOString().slice(0, 10) === value; }, "Use a valid calendar date.");
 const centavos = z.string().regex(/^(0|[1-9]\d*)$/);
 const workflowBody = z.object({ version: z.number().int().positive(), notes: z.string().trim().max(1000).default("") });
+const listQuery = z.object({ asOf: date, search: z.string().trim().min(1).max(100).optional(), bucket: z.enum(["CURRENT", "DAYS_1_30", "DAYS_31_60", "DAYS_61_90", "DAYS_91_PLUS"]).optional(), areaId: id.optional(), collectorId: id.optional(), planId: id.optional(), serviceTypeId: id.optional(), page: z.coerce.number().int().positive().default(1), pageSize: z.coerce.number().int().min(1).max(100).default(50) });
 
 export function registerReceivableRoutes(app: FastifyInstance, auth: AuthService, service: ReceivableService): void {
   app.get("/api/v1/receivables", async (request) => {
     await authorizeRequest(auth, request, "receivable.view");
-    const query = z.object({ asOf: date, overdueOnly: z.stringbool().default(false), page: z.coerce.number().int().positive().default(1), pageSize: z.coerce.number().int().min(1).max(100).default(50) }).parse(request.query);
+    const query = listQuery.extend({ overdueOnly: z.stringbool().default(false) }).parse(request.query);
     return { data: await service.list(query) };
+  });
+  app.get("/api/v1/receivables/overdue-accounts", async (request) => {
+    await authorizeRequest(auth, request, "receivable.view");
+    return { data: await service.overdueAccounts(listQuery.parse(request.query)) };
+  });
+  app.get("/api/v1/receivables/filter-options", async (request) => {
+    await authorizeRequest(auth, request, "receivable.view");
+    return { data: await service.filterOptions() };
   });
   app.get("/api/v1/receivables/aging", async (request) => {
     await authorizeRequest(auth, request, "receivable.view");

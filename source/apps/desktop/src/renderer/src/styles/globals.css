@@ -102,6 +102,47 @@
   --sidebar-ring: #60a5fa;
 }
 
+.dark {
+  color-scheme: dark;
+  --canvas: #090f1a;
+  --surface: #111827;
+  --background: #090f1a;
+  --foreground: #f8fafc;
+  --card: #111827;
+  --card-foreground: #f8fafc;
+  --popover: #111827;
+  --popover-foreground: #f8fafc;
+  --primary: #dbeafe;
+  --primary-foreground: #0f172a;
+  --secondary: #1e293b;
+  --secondary-foreground: #f8fafc;
+  --muted: #1e293b;
+  --muted-foreground: #94a3b8;
+  --accent: #60a5fa;
+  --accent-foreground: #071426;
+  --destructive: #f87171;
+  --danger: #f87171;
+  --success: #34d399;
+  --warning: #fbbf24;
+  --warning-foreground: #fde68a;
+  --border: #293548;
+  --input: #334155;
+  --ring: #60a5fa;
+  --chart-1: #60a5fa;
+  --chart-2: #34d399;
+  --chart-3: #fbbf24;
+  --chart-4: #a78bfa;
+  --chart-5: #f87171;
+  --sidebar: #081426;
+  --sidebar-foreground: #f8fafc;
+  --sidebar-primary: #2563eb;
+  --sidebar-primary-foreground: #ffffff;
+  --sidebar-accent: #132744;
+  --sidebar-accent-foreground: #ffffff;
+  --sidebar-border: #253b59;
+  --sidebar-ring: #60a5fa;
+}
+
 @layer base {
   * {
     @apply border-border outline-ring/50;
@@ -114,7 +155,7 @@
   body {
     @apply bg-background text-foreground;
     margin: 0;
-    min-width: 1024px;
+    min-width: 320px;
     min-height: 100vh;
   }
 

@@ -22,13 +22,15 @@
 
 ## Deliberately unavailable actions
 
-GCash posting, advance credit, invoice void/adjustment, shortage/overage closure, automatic cutoff, mandatory reconnection-payment rules, and reconnection fees remain disabled because their business policies are not approved. Do not work around these controls outside BCIS.
+GCash posting, advance credit, invoice void/adjustment, shortage/overage settlement, automatic cutoff, mandatory reconnection-payment rules, and reconnection fees remain disabled because their detailed business policies are not approved. Bank Transfer, Cheque and Other are required by the laboratory activity but are not implemented. Do not work around these controls outside BCIS.
 
 ## Common problems
 
+- **Server unavailable in the packaged client:** Packaged-origin CORS is an open defect; do not treat a healthy database as proof of desktop connectivity.
+- **Uncertain payment result after a connection failure:** Current desktop retries generate new command keys. Check payment history and ask the supervisor to reconcile the result before submitting again; retry safety is an open defect.
 - **Database unavailable:** Check the server PC, PostgreSQL service, LAN connection, and API environment. Do not repeatedly post a financial command with new command keys.
 - **Conflict/reload message:** Another user changed the record. Reload and review before retrying.
-- **Backup tools unavailable:** Configure PostgreSQL 16 `pg_dump` and `pg_restore` paths on the server.
+- **Backup tools unavailable:** Configure supported PostgreSQL 16+ tools; this local environment uses PostgreSQL 18 `pg_dump` and `pg_restore`.
 - **Export blocked:** The account may have view permission without export permission.
 - **After restore:** Every session is revoked by design; sign in again.
 

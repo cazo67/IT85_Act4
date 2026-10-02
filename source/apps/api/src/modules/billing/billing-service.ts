@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, lte, sql } from "drizzle-orm";
+import { and, asc, desc, eq, ilike, lte, sql, sum } from "drizzle-orm";
 
 import { AppError } from "../../app/app-error.js";
 import type { BcisDatabase } from "../../db/client.js";
@@ -15,6 +15,7 @@ import {
   subscribers
 } from "../../db/schema/index.js";
 import type { SecurityActor } from "../security-admin/security-admin-service.js";
+import { validateReportRange } from "../reports/report-rules.js";
 import { calculateDueDate, invoiceLineTotal, parseBillingPeriod } from "./billing-rules.js";
 
 export interface BillingSummary {
@@ -121,23 +122,24 @@ export class BillingService {
     return rows;
   }
 
-  async listInvoices(input: { periodKey?: string | undefined; subscriberId?: string | undefined; page: number; pageSize: number }) {
+  async listInvoices(input: { periodKey?: string | undefined; subscriberId?: string | undefined; invoiceNumber?: string | undefined; page: number; pageSize: number }) {
     const conditions = [];
     if (input.subscriberId) conditions.push(eq(invoices.subscriberId, input.subscriberId));
+    if (input.invoiceNumber) conditions.push(ilike(invoices.invoiceNumber, `%${input.invoiceNumber}%`));
     if (input.periodKey) {
       const [cycle] = await this.db.select({ id: billingCycles.id }).from(billingCycles).where(eq(billingCycles.periodKey, parseBillingPeriod(input.periodKey).key)).limit(1);
       if (!cycle) return { items: [], page: input.page, pageSize: input.pageSize, hasMore: false };
       conditions.push(eq(invoices.billingCycleId, cycle.id));
     }
-    const rows = await this.db.select().from(invoices).where(conditions.length ? and(...conditions) : undefined).orderBy(desc(invoices.invoiceDate), desc(invoices.invoiceNumber)).limit(input.pageSize).offset((input.page - 1) * input.pageSize);
-    return { items: rows.map(serializeInvoice), page: input.page, pageSize: input.pageSize, hasMore: rows.length === input.pageSize };
+    const rows = await this.db.select({ invoice: invoices, subscriber: subscribers, serviceAccountNumber: serviceAccounts.serviceAccountNumber }).from(invoices).innerJoin(subscribers, eq(invoices.subscriberId, subscribers.id)).innerJoin(serviceAccounts, eq(invoices.serviceAccountId, serviceAccounts.id)).where(conditions.length ? and(...conditions) : undefined).orderBy(desc(invoices.invoiceDate), desc(invoices.invoiceNumber)).limit(input.pageSize + 1).offset((input.page - 1) * input.pageSize);
+    return { items: rows.slice(0, input.pageSize).map((row) => ({ ...serializeInvoice(row.invoice), subscriberAccountNumber: row.subscriber.accountNumber, subscriberName: `${row.subscriber.firstName} ${row.subscriber.lastName}`, serviceAccountNumber: row.serviceAccountNumber })), page: input.page, pageSize: input.pageSize, hasMore: rows.length > input.pageSize };
   }
 
   async getInvoice(invoiceId: string) {
-    const [invoice] = await this.db.select().from(invoices).where(eq(invoices.id, invoiceId)).limit(1);
-    if (!invoice) throw new AppError(404, "INVOICE_NOT_FOUND", "The invoice was not found.");
+    const [row] = await this.db.select({ invoice: invoices, subscriber: subscribers, serviceAccountNumber: serviceAccounts.serviceAccountNumber }).from(invoices).innerJoin(subscribers, eq(invoices.subscriberId, subscribers.id)).innerJoin(serviceAccounts, eq(invoices.serviceAccountId, serviceAccounts.id)).where(eq(invoices.id, invoiceId)).limit(1);
+    if (!row) throw new AppError(404, "INVOICE_NOT_FOUND", "The invoice was not found.");
     const items = await this.db.select().from(invoiceItems).where(eq(invoiceItems.invoiceId, invoiceId)).orderBy(asc(invoiceItems.createdAt));
-    return { invoice: serializeInvoice(invoice), items: items.map((item) => ({ ...item, unitAmountCentavos: item.unitAmountCentavos.toString(), totalCentavos: item.totalCentavos.toString() })) };
+    return { invoice: { ...serializeInvoice(row.invoice), subscriberAccountNumber: row.subscriber.accountNumber, subscriberName: `${row.subscriber.firstName} ${row.subscriber.lastName}`, serviceAccountNumber: row.serviceAccountNumber }, items: items.map((item) => ({ ...item, unitAmountCentavos: item.unitAmountCentavos.toString(), totalCentavos: item.totalCentavos.toString() })) };
   }
 
   async getStatement(subscriberId: string) {
@@ -150,6 +152,27 @@ export class BillingService {
       return { ...entry, sequenceNumber: entry.sequenceNumber.toString(), debitCentavos: entry.debitCentavos.toString(), creditCentavos: entry.creditCentavos.toString(), balanceCentavos: balance.toString() };
     });
     return { subscriber, entries, closingBalanceCentavos: balance.toString() };
+  }
+
+  async listLedger(subscriberId: string, input: { dateFrom?: string | undefined; dateTo?: string | undefined; page: number; pageSize: number }) {
+    if (Boolean(input.dateFrom) !== Boolean(input.dateTo)) throw new AppError(400, "LEDGER_RANGE_REQUIRED", "Provide both ledger start and end dates.");
+    if (input.dateFrom && input.dateTo) validateReportRange(input.dateFrom, input.dateTo, Number.MAX_SAFE_INTEGER);
+    return this.db.transaction(async (transaction) => {
+      const [subscriber] = await transaction.select({ id: subscribers.id, accountNumber: subscribers.accountNumber, firstName: subscribers.firstName, lastName: subscribers.lastName }).from(subscribers).where(eq(subscribers.id, subscriberId)).limit(1);
+      if (!subscriber) throw new AppError(404, "SUBSCRIBER_NOT_FOUND", "The subscriber was not found.");
+      const beforeRange = input.dateFrom ? sql`${ledgerEntries.occurredAt}::date < ${input.dateFrom}::date` : sql`false`;
+      const inRange = input.dateFrom && input.dateTo ? sql`${ledgerEntries.occurredAt}::date between ${input.dateFrom}::date and ${input.dateTo}::date` : undefined;
+      const [openingResult] = await transaction.select({ debit: sum(ledgerEntries.debitCentavos), credit: sum(ledgerEntries.creditCentavos) }).from(ledgerEntries).where(and(eq(ledgerEntries.subscriberId, subscriberId), beforeRange));
+      const [rangeResult] = await transaction.select({ debit: sum(ledgerEntries.debitCentavos), credit: sum(ledgerEntries.creditCentavos) }).from(ledgerEntries).where(and(eq(ledgerEntries.subscriberId, subscriberId), inRange));
+      const pageRows = await transaction.select({ entry: ledgerEntries, runningNet: sql<string>`sum(${ledgerEntries.debitCentavos} - ${ledgerEntries.creditCentavos}) over (order by ${ledgerEntries.occurredAt}, ${ledgerEntries.id} rows between unbounded preceding and current row)` }).from(ledgerEntries).where(and(eq(ledgerEntries.subscriberId, subscriberId), inRange)).orderBy(asc(ledgerEntries.occurredAt), asc(ledgerEntries.id)).limit(input.pageSize + 1).offset((input.page - 1) * input.pageSize);
+      const opening = BigInt(openingResult?.debit ?? 0) - BigInt(openingResult?.credit ?? 0);
+      const closing = opening + BigInt(rangeResult?.debit ?? 0) - BigInt(rangeResult?.credit ?? 0);
+      const visible = pageRows.slice(0, input.pageSize);
+      const entries = visible.map(({ entry, runningNet }) => ({ id: entry.id, sequenceNumber: entry.sequenceNumber.toString(), type: entry.type, description: entry.description, occurredAt: entry.occurredAt, invoiceId: entry.invoiceId, paymentId: entry.paymentId, debitCentavos: entry.debitCentavos.toString(), creditCentavos: entry.creditCentavos.toString(), balanceCentavos: (opening + BigInt(runningNet)).toString() }));
+      const first = visible[0];
+      const pageOpening = first ? opening + BigInt(first.runningNet) - first.entry.debitCentavos + first.entry.creditCentavos : closing;
+      return { subscriber, entries, dateFrom: input.dateFrom ?? null, dateTo: input.dateTo ?? null, openingBalanceCentavos: opening.toString(), pageOpeningBalanceCentavos: pageOpening.toString(), closingBalanceCentavos: closing.toString(), page: input.page, pageSize: input.pageSize, hasMore: pageRows.length > input.pageSize };
+    }, { isolationLevel: "repeatable read" });
   }
 
   private eligibleServices(periodEnd: string) {
@@ -172,5 +195,5 @@ async function nextSequence(transaction: BillingTransaction, code: string): Prom
 }
 
 function serializeInvoice(invoice: typeof invoices.$inferSelect) {
-  return { ...invoice, subtotalCentavos: invoice.subtotalCentavos.toString(), totalCentavos: invoice.totalCentavos.toString(), paidCentavos: invoice.paidCentavos.toString() };
+  return { ...invoice, subtotalCentavos: invoice.subtotalCentavos.toString(), totalCentavos: invoice.totalCentavos.toString(), paidCentavos: invoice.paidCentavos.toString(), outstandingCentavos: (invoice.totalCentavos - invoice.paidCentavos).toString() };
 }
