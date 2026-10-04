@@ -21,7 +21,7 @@ let client: CdpClient | undefined;
 
 try {
   const check = await pool.query("select current_database() as name, (select count(*)::int from drizzle.__drizzle_migrations) as migrations");
-  if (check.rows[0]?.name !== "bcis_test" || check.rows[0]?.migrations !== 15) throw new Error("Unmigrated or incorrect test database.");
+  if (check.rows[0]?.name !== "bcis_test" || check.rows[0]?.migrations !== 19) throw new Error("Unmigrated or incorrect test database.");
   const ready = await fetch("http://127.0.0.1:4110/api/v1/health/ready");
   if (ready.status !== 200) throw new Error("The dedicated test API must be ready on port 4110.");
   const username = `gate2_ui_${randomUUID()}`;

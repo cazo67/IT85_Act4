@@ -2,11 +2,41 @@
 
 These rules govern the implemented financial modules. Automated tests cover selected code-level behavior, and the current local Cash snapshot reconciles. Full rollback/concurrency/historical/recovery and desktop acceptance remains open; these statements describe required invariants, not blanket verification.
 
+## Gate 4 approved laboratory policy: GCash and advance credit (2026-10-03)
+
+The project owner requested the simplest practical rules for this laboratory system. These rules are approved as the **implementation target**, not evidence that the features are enabled or accepted. Until the corresponding database, API, UI and guarded integration tests pass, the current GCash and overpayment gates stay closed. No separate instructor endorsement is claimed.
+
+## Gate 4 additional owner-approved laboratory rules (2026-10-04)
+
+These are implementation targets approved in chat, not evidence of a working or tested feature. This pass defers tests and database migration application until the later verification stage.
+
+- Bank Transfer, Cheque and Other are subscriber payments using the same oldest-first allocation, subscriber-credit, receipt, ledger, reversal and audit rules as Cash. Staff must explicitly confirm that the money was received before posting; for Cheque, that means cleared. A normalized reference (trim, uppercase, remove spaces/hyphens; 6–40 ASCII letters/digits) is required and unique **within each method across subscribers and all payment statuses**. Reversal does not release a reference. Other also requires a 10–200 character description. This one-step confirmed-post workflow does not model uncleared instruments or a second approval level. The receipt retains the method, reference and any Other description. A BCIS reversal does not perform an external bank or cheque refund.
+- Only staff with the existing `billing.adjust` permission may void an invoice. A reason of 10–500 characters is required. The invoice must be OPEN with zero paid centavos and must have **no payment-allocation history**, including reversed allocations or credit application. The original invoice, items and debit stay immutable; one linked void record, VOID status, compensating `VOID_CREDIT` ledger entry and audit event commit together. The invoice number is never reused. Paid or historically allocated invoices require separate correction policy and remain blocked.
+- Collector shortage/overage is always shown as the signed remitted-minus-collected difference. A nonzero batch may not reconcile or close as balanced. A correction must record the actual corrected cash amount, a reason and authorized actor while retaining the original remittance; only an effective remitted amount exactly equal to collected Cash may reconcile and close. No write-off, silent balancing or automatic settlement is allowed.
+
+### GCash
+
+1. A staff member with `payment.create` records an existing subscriber, positive amount, sender name and 11-digit mobile number, transaction reference, and one JPEG/PNG proof image (maximum 2 MiB). The submission is `PENDING`; it does **not** reduce the balance or issue a receipt. No Facebook integration is required; staff may enter information received through the company page.
+2. Normalize a reference by trimming, uppercasing and removing spaces/hyphens only. The result must contain 6–40 ASCII letters/digits. The normalized reference is unique across **all** GCash submissions and posted payments, regardless of subscriber or status. A duplicate is blocked, never merely warned or overridden. A rejected submission may be corrected and resubmitted as that same record with an audit event; rejection or reversal does not release its reference for a new record.
+3. Store proof bytes in PostgreSQL with the record (rather than a second file store) so the existing database backup/restore can include them. Verify image type from bytes, not filename alone; reject invalid/oversized files. Keep proof with its payment/audit history for the laboratory project; do not automatically purge it. Only authorized staff may retrieve it, and the renderer receives no database path or credential. Use synthetic proof data in tests and demonstrations.
+4. A staff member with `payment.verify_gcash` checks the reference, amount, sender and proof against the company's actual received GCash transaction history. A screenshot alone is insufficient. The verifier may be the uploader in this small laboratory workflow; no second approval level is required. If unverifiable or incorrect, reject with a reason and retain the submission/audit history without posting. No automatic verification is claimed.
+5. Verification and posting are one idempotent database transaction: recheck uniqueness and status, create one GCash payment and receipt, allocate oldest open invoices first, retain any remainder as subscriber credit, write ledger/audit records, and mark the proof verified with actor/time. A retry may return the original result but cannot create a second payment or receipt. Direct GCash posting without a verified proof remains forbidden. Reversal keeps the original payment/reference and marks its receipt void; it never silently deletes history or initiates an external GCash refund.
+
+GCash identifies transactions by reference number and provides transaction history in its app; staff verification must use the receiver's record, not just an uploaded image. See [GCash transaction history](https://help.gcash.com/hc/en-us/articles/360034155433-How-to-request-transaction-history) and [GCash reference ID guidance](https://help.gcash.com/hc/en-us/articles/31315974255129-Multiple-charges-for-scan-QR-payment). The exact BCIS validation and workflow above are project-owner choices, not claims that GCash mandates these limits.
+
+### Advance payment and account credit
+
+1. Accept a positive Cash or **verified** GCash payment even when it exceeds current invoices or no invoice is open. Apply as much as possible to the subscriber's oldest unpaid invoices first. Store every unallocated centavo as available credit owned by the **subscriber**, not a service account. The original receipt shows the full amount, applied amount and remaining credit.
+2. When a later invoice is finalized, apply available subscriber credit to that subscriber's oldest unpaid invoice(s), then update invoice paid/status and credit remaining in the **same** transaction. Record each credit-to-invoice application with source payment, amount and timestamp so history is reproducible. Do not issue a second receipt or count the credit application as a new collection. A partially covered invoice remains outstanding for its unpaid remainder.
+3. Show available credit separately from invoice arrears. The account's net ledger balance equals outstanding invoice centavos minus unused credit centavos. A credit may make the net balance negative; display it as credit, not as a negative debt. Preserve `bigint` centavos internally and decimal strings over HTTP. No centavo may disappear or be applied twice under retry/concurrency.
+4. Correct a posted payment only by an authorized, reasoned reversal. In one transaction undo that payment's invoice allocations and any later applications of its credit, restore affected invoice balances, cancel its unused credit, add a compensating ledger debit, void the receipt and retain audit/history. Do not delete the original payment. Transfers between subscribers, cash refunds, manual allocation overrides and automatic fees are **out of scope** until separately approved; the UI must not imply that reversing a BCIS record sends money back externally.
+
 - Store authoritative money as PostgreSQL `bigint` centavos and TypeScript `bigint`.
 - Serialize centavos at API boundaries as base-10 integer strings.
 - Never use JavaScript floating-point arithmetic for authoritative totals.
 - Finalized invoices, posted payments, allocations, receipts, ledger entries, remittances, and reversals are historical records, not destructive CRUD rows.
 - Multi-row financial operations commit in one PostgreSQL transaction or leave no partial state.
+- Monthly billing acquires affected subscriber payment locks in stable order before invoice-number writes. Cash/verified GCash posting and payment reversal use the same per-subscriber lock before changing allocations or credit, preventing an advance reversal from racing a future bill into a stale paid state or deadlocking on numbering.
 - Database constraints and idempotency protect duplicate billing and numbering; UI disabling is never the final control.
 - Payment value must be allocated to invoices or retained as explicit credit. No centavo may disappear.
 - Reversals use linked compensating entries and preserve the original actor, reason, and receipt history.
@@ -42,6 +72,21 @@ These rules govern the implemented financial modules. Automated tests cover sele
 - Include batches whose `collection_date` is in the inclusive selected range (at most 366 days), group by collector ID and show the current collector name. This is a **current-state batch report**: later collections and remittances can change a rerun for the same dates. It is not a historical as-of report, productivity target, or settlement decision.
 - Batch/account counts and expected, collected and remitted Cash are recorded values. Collected-account count includes batch accounts currently marked `COLLECTED`. A confirmed difference contributes only when a remittance record exists; its signed value is remitted minus collected. Count unremitted batches, remitted batches with nonzero unresolved differences, and batch-header/account-total mismatches separately. A zero signed sum can hide opposing shortage/overage, so the unresolved count must stay visible.
 - A remitted batch with a nonzero difference remains unresolved; this report does not approve, settle, or close it. GCash/non-cash and policy-dependent shortage/overage treatment are not inferred. Preview requires `report.view`; export additionally requires `report.export`.
+
+## User and audit activity report
+
+- `audit-activity` reports recorded audit events by inclusive session-local event date, including authentication and user/role changes. It shows UTC event time, actor identity, action and entity reference only. It deliberately omits request/session identifiers, reasons and before/after JSON so exported files do not spread sensitive operational data. Failed login attempts are retained in `login_attempts` and are **not** audit events in this report.
+- The catalog hides this entry unless the session has `audit.view`; preview requires both `report.view` and `audit.view`, and export additionally requires `report.export`. The API repeats these checks before revealing any audit rows.
+
+## Billed revenue attribution report
+
+- `billed-revenue` groups non-VOID finalized invoices by inclusive invoice date. It sums each invoice's immutable total once and uses the invoice's frozen plan code/name. The service type is resolved through that stable plan code; the area is explicitly the subscriber's **current** collection area because invoices have no area snapshot. Area movement can therefore reclassify historical billed totals; this is not a historical area ledger.
+- The total is billed revenue, not Cash collected, allocations or realized revenue. Neither current plan price nor current service rate enters the calculation. Invoice voiding remains disabled until an approved accounting policy exists.
+
+## Payment reversal and voided-receipt report
+
+- Select immutable Cash and verified-GCash `payment_reversals` by `reversed_at::date` in an inclusive range of at most 366 days. This is a reversal-event report, not a report of original payment dates or a negative collection total. Each positive amount denotes the compensating ledger debit restoring receivable; the original payment, method, receipt number, reversal reason and actor remain linked. Reversing the BCIS record does not issue an external GCash refund.
+- The receipt state is shown as `VOIDED` only when the linked receipt has a void timestamp and the payment status is `REVERSED`; missing/unvoided receipts or a mismatched payment status are flagged as exceptions, not hidden. The report does not create reversals, enable invoice voiding or authorize new accounting treatment. Preview requires `report.view`; export additionally requires `report.export`.
 
 ## Collection route-sheet snapshot rule
 

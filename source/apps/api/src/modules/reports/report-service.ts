@@ -2,7 +2,7 @@ import { and, asc, count, desc, eq, inArray, lte, ne, sql, sum } from "drizzle-o
 
 import { AppError } from "../../app/app-error.js";
 import type { BcisDatabase } from "../../db/client.js";
-import { auditLogs, collectionAreas, collectionBatchAccounts, collectionBatches, collectionRoutes, collectorAssignments, collectorRemittances, collectors, invoices, ledgerEntries, payments, serviceAccounts, servicePlans, serviceTypes, subscriberAddresses, subscriberContacts, subscribers } from "../../db/schema/index.js";
+import { auditLogs, collectionAreas, collectionBatchAccounts, collectionBatches, collectionRoutes, collectorAssignments, collectorRemittances, collectors, invoices, ledgerEntries, paymentReversals, payments, receipts, remittanceCorrections, serviceAccounts, servicePlans, serviceTypes, subscriberAddresses, subscriberContacts, subscribers, users } from "../../db/schema/index.js";
 import { renderReportPdf, renderReportXlsx } from "../../infrastructure/reports/report-renderers.js";
 import { reportDefinitions, type ReportCode, type ReportDocument } from "../../infrastructure/reports/report-model.js";
 import { ReceivableService } from "../receivables/receivable-service.js";
@@ -55,12 +55,15 @@ export class ReportService {
     if (code === "annual-collections") return this.annualCollections(requireCalendarYear(parameters), generatedBy);
     if (code === "monthly-collections") return this.monthlyCollections(requireRange(parameters), generatedBy);
     if (code === "billing-vs-collection") return this.billingVsCollection(requireRange(parameters), generatedBy);
+    if (code === "billed-revenue") return this.billedRevenue(requireRange(parameters), generatedBy);
     if (code === "subscriber-master") return this.subscriberMaster(parameters, generatedBy);
     if (code === "ar-aging") return this.arAging(requireAsOf(parameters), generatedBy);
     if (code === "subscriber-soa") return this.subscriberSoa(requireSoa(parameters), generatedBy);
     if (code === "subscriber-ledger") return this.subscriberLedger(requireSoa(parameters), generatedBy);
     if (code === "collector-assignments") return this.collectorAssignments(requireAsOf(parameters), generatedBy);
     if (code === "collector-performance") return this.collectorPerformance(requireRange(parameters), generatedBy);
+    if (code === "payment-reversals") return this.paymentReversals(requireRange(parameters), generatedBy);
+    if (code === "audit-activity") return this.auditActivity(requireRange(parameters), generatedBy);
     return this.collectorReconciliation(requireRange(parameters), generatedBy);
   }
 
@@ -135,6 +138,31 @@ export class ReportService {
     return document("billing-vs-collection", "Billing versus Collection by Month (Currently Posted)", input, generatedBy,
       [{ key: "monthStart", label: "Month", type: "date" }, { key: "invoiceCount", label: "Invoices", type: "integer" }, { key: "billedCentavos", label: "Billed", type: "money" }, { key: "paymentCount", label: "Payments", type: "integer" }, { key: "collectedCentavos", label: "Collected", type: "money" }, { key: "differenceCentavos", label: "Period difference", type: "money" }],
       rows, [{ label: "Invoices", value: rows.reduce((total, row) => total + Number(row.invoiceCount), 0), type: "integer" }, { label: "Billed", value: sumMoney(rows.map((row) => row.billedCentavos)), type: "money" }, { label: "Payments", value: rows.reduce((total, row) => total + Number(row.paymentCount), 0), type: "integer" }, { label: "Collected", value: sumMoney(rows.map((row) => row.collectedCentavos)), type: "money" }, { label: "Period difference", value: sumMoney(rows.map((row) => row.differenceCentavos)), type: "money" }]);
+  }
+
+  private async billedRevenue(input: { dateFrom: string; dateTo: string }, generatedBy: string): Promise<ReportDocument> {
+    const result = await this.db.execute<{
+      planCode: string; planName: string; serviceType: string; currentArea: string;
+      invoiceCount: number; billedCentavos: string;
+    }>(sql`
+      select ${invoices.planCodeSnapshot} as "planCode", ${invoices.planNameSnapshot} as "planName",
+        coalesce(${serviceTypes.name}, 'Unknown') as "serviceType",
+        coalesce(${collectionAreas.name}, 'Unassigned') as "currentArea",
+        count(*)::int as "invoiceCount", sum(${invoices.totalCentavos})::text as "billedCentavos"
+      from ${invoices}
+      left join ${servicePlans} on ${servicePlans.code} = ${invoices.planCodeSnapshot}
+      left join ${serviceTypes} on ${serviceTypes.id} = ${servicePlans.serviceTypeId}
+      join ${subscribers} on ${subscribers.id} = ${invoices.subscriberId}
+      left join ${collectionAreas} on ${collectionAreas.id} = ${subscribers.collectionAreaId}
+      where ${invoices.status} <> 'VOID'
+        and ${invoices.invoiceDate} between ${input.dateFrom}::date and ${input.dateTo}::date
+      group by ${invoices.planCodeSnapshot}, ${invoices.planNameSnapshot}, ${serviceTypes.name}, ${collectionAreas.name}
+      order by ${serviceTypes.name}, ${invoices.planCodeSnapshot}, ${collectionAreas.name}
+    `);
+    const rows = result.rows;
+    return document("billed-revenue", "Billed Revenue by Plan, Service and Current Area", input, generatedBy,
+      [{ key: "serviceType", label: "Service type", type: "text" }, { key: "planCode", label: "Plan code at billing", type: "text", width: 24 }, { key: "planName", label: "Plan name at billing", type: "text", width: 28 }, { key: "currentArea", label: "Current subscriber area", type: "text", width: 28 }, { key: "invoiceCount", label: "Invoices", type: "integer" }, { key: "billedCentavos", label: "Billed", type: "money" }],
+      rows, [{ label: "Invoices", value: rows.reduce((total, row) => total + row.invoiceCount, 0), type: "integer" }, { label: "Billed", value: sumMoney(rows.map((row) => row.billedCentavos)), type: "money" }]);
   }
 
   private async subscriberMaster(input: ReportParameters, generatedBy: string): Promise<ReportDocument> {
@@ -295,6 +323,54 @@ export class ReportService {
       rows, [{ label: "Collectors", value: rows.length, type: "integer" }, { label: "Batches", value: rows.reduce((total, row) => total + row.batchCount, 0), type: "integer" }, { label: "Assigned accounts", value: rows.reduce((total, row) => total + row.accountCount, 0), type: "integer" }, { label: "Collected accounts", value: rows.reduce((total, row) => total + row.collectedAccountCount, 0), type: "integer" }, { label: "Expected Cash", value: sumMoney(rows.map((row) => row.expectedCentavos)), type: "money" }, { label: "Collected Cash", value: sumMoney(rows.map((row) => row.collectedCentavos)), type: "money" }, { label: "Remitted Cash", value: sumMoney(rows.map((row) => row.remittedCentavos)), type: "money" }, { label: "Confirmed difference", value: sumMoney(rows.map((row) => row.confirmedDifferenceCentavos)), type: "money" }, { label: "Unremitted batches", value: rows.reduce((total, row) => total + row.unremittedBatches, 0), type: "integer" }, { label: "Unresolved difference batches", value: rows.reduce((total, row) => total + row.unresolvedDifferenceBatches, 0), type: "integer" }, { label: "Totals mismatch batches", value: rows.reduce((total, row) => total + row.totalsMismatchBatches, 0), type: "integer" }]);
   }
 
+  private async paymentReversals(input: { dateFrom: string; dateTo: string }, generatedBy: string): Promise<ReportDocument> {
+    const rows = await this.db.select({
+      date: sql<string>`${paymentReversals.reversedAt}::date`,
+      reversalNumber: paymentReversals.reversalNumber,
+      paymentNumber: payments.paymentNumber,
+      receiptNumber: receipts.receiptNumber,
+      accountNumber: subscribers.accountNumber,
+      method: payments.method,
+      amountCentavos: payments.amountCentavos,
+      reason: paymentReversals.reason,
+      reversedBy: users.displayName,
+      receiptVoidedAt: receipts.voidedAt,
+      paymentStatus: payments.status
+    }).from(paymentReversals)
+      .innerJoin(payments, eq(paymentReversals.paymentId, payments.id))
+      .innerJoin(subscribers, eq(payments.subscriberId, subscribers.id))
+      .leftJoin(receipts, eq(receipts.paymentId, payments.id))
+      .leftJoin(users, eq(users.id, paymentReversals.reversedBy))
+      .where(sql`${paymentReversals.reversedAt}::date between ${input.dateFrom}::date and ${input.dateTo}::date`)
+      .orderBy(asc(paymentReversals.reversedAt), asc(paymentReversals.id));
+    const serialized = rows.map((row) => ({
+      date: row.date, reversalNumber: row.reversalNumber, paymentNumber: row.paymentNumber,
+      receiptNumber: row.receiptNumber ?? "", accountNumber: row.accountNumber, method: row.method,
+      amountCentavos: row.amountCentavos.toString(), reason: row.reason, reversedBy: row.reversedBy ?? "",
+      receiptState: !row.receiptNumber ? "MISSING RECEIPT" : !row.receiptVoidedAt ? "NOT VOIDED" : row.paymentStatus !== "REVERSED" ? "PAYMENT STATUS MISMATCH" : "VOIDED"
+    }));
+    return document("payment-reversals", "Payment Reversals and Voided Receipts", input, generatedBy,
+      [{ key: "date", label: "Reversal date", type: "date" }, { key: "reversalNumber", label: "Reversal", type: "text", width: 22 }, { key: "paymentNumber", label: "Original payment", type: "text", width: 22 }, { key: "receiptNumber", label: "Original receipt", type: "text", width: 22 }, { key: "accountNumber", label: "Subscriber", type: "text", width: 18 }, { key: "method", label: "Method", type: "text" }, { key: "amountCentavos", label: "Compensating debit", type: "money" }, { key: "reason", label: "Reason", type: "text", width: 35 }, { key: "reversedBy", label: "Reversed by", type: "text" }, { key: "receiptState", label: "Receipt state", type: "text" }],
+      serialized, [{ label: "Payment reversals", value: rows.length, type: "integer" }, { label: "Compensating debits", value: sumMoney(rows.map((row) => row.amountCentavos)), type: "money" }, { label: "Voided receipts", value: serialized.filter((row) => row.receiptState === "VOIDED").length, type: "integer" }, { label: "Receipt/status exceptions", value: serialized.filter((row) => row.receiptState !== "VOIDED").length, type: "integer" }]);
+  }
+
+  private async auditActivity(input: { dateFrom: string; dateTo: string }, generatedBy: string): Promise<ReportDocument> {
+    const rows = await this.db.select({
+      occurredAt: auditLogs.occurredAt, actorUsername: users.username, actorName: users.displayName,
+      action: auditLogs.action, entityType: auditLogs.entityType, entityId: auditLogs.entityId
+    }).from(auditLogs).leftJoin(users, eq(auditLogs.actorUserId, users.id))
+      .where(sql`${auditLogs.occurredAt}::date between ${input.dateFrom}::date and ${input.dateTo}::date`)
+      .orderBy(asc(auditLogs.occurredAt), asc(auditLogs.id));
+    const serialized = rows.map((row) => ({
+      occurredAt: row.occurredAt.toISOString(), actorUsername: row.actorUsername ?? "System",
+      actorName: row.actorName ?? "System", action: row.action, entityType: row.entityType,
+      entityId: row.entityId ?? ""
+    }));
+    return document("audit-activity", "User and Audit Activity", input, generatedBy,
+      [{ key: "occurredAt", label: "Occurred at (UTC)", type: "text", width: 28 }, { key: "actorUsername", label: "Actor username", type: "text", width: 22 }, { key: "actorName", label: "Actor name", type: "text", width: 25 }, { key: "action", label: "Action", type: "text", width: 28 }, { key: "entityType", label: "Entity type", type: "text", width: 22 }, { key: "entityId", label: "Entity ID", type: "text", width: 38 }],
+      serialized, [{ label: "Audit events", value: rows.length, type: "integer" }, { label: "User/security events", value: rows.filter((row) => row.action.startsWith("auth.") || row.action.startsWith("user.") || row.action.startsWith("role.")).length, type: "integer" }, { label: "Distinct named actors", value: new Set(rows.map((row) => row.actorUsername).filter(Boolean)).size, type: "integer" }]);
+  }
+
   private async collectorReconciliation(input: { dateFrom: string; dateTo: string }, generatedBy: string): Promise<ReportDocument> {
     const accounts = this.db.select({
       batchId: collectionBatchAccounts.batchId,
@@ -309,12 +385,15 @@ export class ReportService {
       expectedCentavos: collectionBatches.expectedCashCentavos, collectedCentavos: collectionBatches.collectedCashCentavos,
       remittedCentavos: collectionBatches.remittedCashCentavos, nonCashCentavos: collectionBatches.nonCashCentavos,
       differenceCentavos: collectionBatches.differenceCentavos, remittanceNumber: collectorRemittances.remittanceNumber,
+      originalRemittedCentavos: collectorRemittances.remittedCashCentavos, originalDifferenceCentavos: collectorRemittances.differenceCentavos,
+      correctionReason: remittanceCorrections.reason, correctedAt: remittanceCorrections.correctedAt,
       accountCount: accounts.count, collectedAccountCount: accounts.collectedCount,
       accountExpectedCentavos: accounts.expected, accountCollectedCentavos: accounts.collected
     }).from(collectionBatches)
       .innerJoin(collectors, eq(collectionBatches.collectorId, collectors.id))
       .innerJoin(collectionRoutes, eq(collectionBatches.routeId, collectionRoutes.id))
       .leftJoin(collectorRemittances, eq(collectorRemittances.batchId, collectionBatches.id))
+      .leftJoin(remittanceCorrections, eq(remittanceCorrections.remittanceId, collectorRemittances.id))
       .leftJoin(accounts, eq(accounts.batchId, collectionBatches.id))
       .where(sql`${collectionBatches.collectionDate} between ${input.dateFrom}::date and ${input.dateTo}::date`)
       .orderBy(desc(collectionBatches.collectionDate), asc(collectionBatches.batchNumber));
@@ -328,13 +407,13 @@ export class ReportService {
         batchNumber: row.batchNumber, date: row.date, collector: row.collector, route: row.route, status: row.status,
         accountCount: row.accountCount ?? 0, collectedAccountCount: row.collectedAccountCount ?? 0,
         expectedCentavos: row.expectedCentavos.toString(), collectedCentavos: row.collectedCentavos.toString(),
-        remittedCentavos: row.remittedCentavos.toString(), nonCashCentavos: row.nonCashCentavos.toString(),
+        remittedCentavos: row.remittedCentavos.toString(), originalRemittedCentavos: row.originalRemittedCentavos?.toString() ?? "", originalDifferenceCentavos: row.originalDifferenceCentavos?.toString() ?? "", correctionReason: row.correctionReason ?? "", correctedAt: row.correctedAt?.toISOString() ?? "", nonCashCentavos: row.nonCashCentavos.toString(),
         uncollectedCentavos: (accountExpected - accountCollected).toString(), differenceCentavos: difference.toString(),
         exception: totalsMatch ? remittanceState : `TOTALS MISMATCH / ${remittanceState}`
       };
     });
     return document("collector-reconciliation", "Collector Reconciliation", input, generatedBy,
-      [{ key: "batchNumber", label: "Batch", type: "text" }, { key: "date", label: "Date", type: "date" }, { key: "collector", label: "Collector", type: "text" }, { key: "route", label: "Route", type: "text" }, { key: "status", label: "Status", type: "text" }, { key: "accountCount", label: "Accounts", type: "integer" }, { key: "collectedAccountCount", label: "Accounts collected", type: "integer" }, { key: "expectedCentavos", label: "Expected Cash", type: "money" }, { key: "collectedCentavos", label: "Collected Cash", type: "money" }, { key: "remittedCentavos", label: "Remitted Cash", type: "money" }, { key: "nonCashCentavos", label: "Non-cash", type: "money" }, { key: "uncollectedCentavos", label: "Uncollected", type: "money" }, { key: "differenceCentavos", label: "Difference", type: "money" }, { key: "exception", label: "Exception / remittance state", type: "text" }], serialized,
+      [{ key: "batchNumber", label: "Batch", type: "text" }, { key: "date", label: "Date", type: "date" }, { key: "collector", label: "Collector", type: "text" }, { key: "route", label: "Route", type: "text" }, { key: "status", label: "Status", type: "text" }, { key: "accountCount", label: "Accounts", type: "integer" }, { key: "collectedAccountCount", label: "Accounts collected", type: "integer" }, { key: "expectedCentavos", label: "Expected Cash", type: "money" }, { key: "collectedCentavos", label: "Collected Cash", type: "money" }, { key: "originalRemittedCentavos", label: "Original Remittance", type: "text" }, { key: "originalDifferenceCentavos", label: "Original Difference", type: "text" }, { key: "remittedCentavos", label: "Current Remitted Cash", type: "money" }, { key: "correctionReason", label: "Correction Reason", type: "text" }, { key: "correctedAt", label: "Corrected At", type: "text" }, { key: "nonCashCentavos", label: "Non-cash", type: "money" }, { key: "uncollectedCentavos", label: "Uncollected", type: "money" }, { key: "differenceCentavos", label: "Current Difference", type: "money" }, { key: "exception", label: "Exception / remittance state", type: "text" }], serialized,
       [{ label: "Batches", value: rows.length, type: "integer" }, { label: "Expected Cash", value: sumMoney(rows.map((row) => row.expectedCentavos)), type: "money" }, { label: "Collected Cash", value: sumMoney(rows.map((row) => row.collectedCentavos)), type: "money" }, { label: "Remitted Cash", value: sumMoney(rows.map((row) => row.remittedCentavos)), type: "money" }, { label: "Non-cash", value: sumMoney(rows.map((row) => row.nonCashCentavos)), type: "money" }, { label: "Uncollected", value: sumMoney(serialized.map((row) => row.uncollectedCentavos)), type: "money" }, { label: "Accounts collected", value: serialized.reduce((total, row) => total + row.collectedAccountCount, 0), type: "integer" }, { label: "Confirmed difference", value: sumMoney(rows.filter((row) => row.remittanceNumber).map((row) => row.differenceCentavos)), type: "money" }, { label: "Shortage / overage batches", value: rows.filter((row) => row.remittanceNumber && row.differenceCentavos !== 0n).length, type: "integer" }, { label: "Totals mismatch batches", value: serialized.filter((row) => row.exception.startsWith("TOTALS MISMATCH")).length, type: "integer" }]);
   }
 }

@@ -7,14 +7,18 @@ import {
   billingCycles,
   billingIdempotency,
   invoiceItems,
+  invoiceVoids,
   invoices,
   ledgerEntries,
   numberSequences,
+  paymentAllocations,
   serviceAccounts,
   servicePlans,
+  subscriberCredits,
   subscribers
 } from "../../db/schema/index.js";
 import type { SecurityActor } from "../security-admin/security-admin-service.js";
+import { invoiceSettlementStatus } from "../payments/payment-rules.js";
 import { validateReportRange } from "../reports/report-rules.js";
 import { calculateDueDate, invoiceLineTotal, parseBillingPeriod } from "./billing-rules.js";
 
@@ -82,6 +86,10 @@ export class BillingService {
         .orderBy(asc(serviceAccounts.serviceAccountNumber));
       if (eligible.length > 10_000) throw new AppError(409, "BILLING_BATCH_TOO_LARGE", "The billing run exceeds the safe batch limit.");
 
+      for (const subscriberId of [...new Set(eligible.map((row) => row.service.subscriberId))].sort()) {
+        await transaction.execute(sql`select pg_advisory_xact_lock(hashtext(${`bcis-payment:${subscriberId}`}))`);
+      }
+
       let invoiceCount = 0;
       let total = 0n;
       for (const row of eligible) {
@@ -105,6 +113,19 @@ export class BillingService {
         await transaction.insert(invoiceItems).values({ invoiceId: invoice.id, type: "PLAN_SERVICE", description: `${row.plan.name} monthly service`, quantity: 1, unitAmountCentavos: amount, totalCentavos: amount });
         const ledgerSequence = await nextSequence(transaction, "LEDGER");
         await transaction.insert(ledgerEntries).values({ sequenceNumber: ledgerSequence, subscriberId: row.service.subscriberId, serviceAccountId: row.service.id, invoiceId: invoice.id, type: "INVOICE_DEBIT", description: `Invoice ${invoiceNumber}`, debitCentavos: amount, actorUserId: actor.userId });
+        const availableCredits = await transaction.select().from(subscriberCredits).where(and(eq(subscriberCredits.subscriberId, row.service.subscriberId), eq(subscriberCredits.status, "AVAILABLE"))).orderBy(asc(subscriberCredits.createdAt), asc(subscriberCredits.id)).for("update");
+        let paid = 0n;
+        for (const credit of availableCredits) {
+          if (paid === amount) break;
+          const applied = credit.remainingCentavos < amount - paid ? credit.remainingCentavos : amount - paid;
+          if (applied <= 0n) continue;
+          await transaction.insert(paymentAllocations).values({ paymentId: credit.sourcePaymentId, invoiceId: invoice.id, amountCentavos: applied, fromCredit: true });
+          const remaining = credit.remainingCentavos - applied;
+          await transaction.update(subscriberCredits).set({ remainingCentavos: remaining, status: remaining === 0n ? "CONSUMED" : "AVAILABLE", updatedAt: new Date() }).where(eq(subscriberCredits.id, credit.id));
+          await transaction.insert(auditLogs).values({ actorUserId: actor.userId, actorSessionId: actor.sessionId, action: "credit.apply", entityType: "invoice", entityId: invoice.id, requestId: actor.requestId ?? null, afterValues: { sourcePaymentId: credit.sourcePaymentId, amountCentavos: applied.toString() } });
+          paid += applied;
+        }
+        if (paid > 0n) await transaction.update(invoices).set({ paidCentavos: paid, status: invoiceSettlementStatus(paid, amount) }).where(eq(invoices.id, invoice.id));
         invoiceCount += 1;
         total += amount;
       }
@@ -139,7 +160,28 @@ export class BillingService {
     const [row] = await this.db.select({ invoice: invoices, subscriber: subscribers, serviceAccountNumber: serviceAccounts.serviceAccountNumber }).from(invoices).innerJoin(subscribers, eq(invoices.subscriberId, subscribers.id)).innerJoin(serviceAccounts, eq(invoices.serviceAccountId, serviceAccounts.id)).where(eq(invoices.id, invoiceId)).limit(1);
     if (!row) throw new AppError(404, "INVOICE_NOT_FOUND", "The invoice was not found.");
     const items = await this.db.select().from(invoiceItems).where(eq(invoiceItems.invoiceId, invoiceId)).orderBy(asc(invoiceItems.createdAt));
-    return { invoice: { ...serializeInvoice(row.invoice), subscriberAccountNumber: row.subscriber.accountNumber, subscriberName: `${row.subscriber.firstName} ${row.subscriber.lastName}`, serviceAccountNumber: row.serviceAccountNumber }, items: items.map((item) => ({ ...item, unitAmountCentavos: item.unitAmountCentavos.toString(), totalCentavos: item.totalCentavos.toString() })) };
+    const [voidRecord] = await this.db.select().from(invoiceVoids).where(eq(invoiceVoids.invoiceId, invoiceId)).limit(1);
+    return { invoice: { ...serializeInvoice(row.invoice), subscriberAccountNumber: row.subscriber.accountNumber, subscriberName: `${row.subscriber.firstName} ${row.subscriber.lastName}`, serviceAccountNumber: row.serviceAccountNumber }, items: items.map((item) => ({ ...item, unitAmountCentavos: item.unitAmountCentavos.toString(), totalCentavos: item.totalCentavos.toString() })), voidRecord: voidRecord ?? null };
+  }
+
+  async voidInvoice(invoiceId: string, reason: string, actor: SecurityActor) {
+    return this.db.transaction(async (transaction) => {
+      const [owner] = await transaction.select({ subscriberId: invoices.subscriberId }).from(invoices).where(eq(invoices.id, invoiceId)).limit(1);
+      if (!owner) throw new AppError(404, "INVOICE_NOT_FOUND", "The invoice was not found.");
+      await transaction.execute(sql`select pg_advisory_xact_lock(hashtext(${`bcis-payment:${owner.subscriberId}`}))`);
+      const [invoice] = await transaction.select().from(invoices).where(eq(invoices.id, invoiceId)).for("update").limit(1);
+      if (!invoice || invoice.status !== "OPEN" || invoice.paidCentavos !== 0n) throw new AppError(409, "INVOICE_VOID_NOT_ELIGIBLE", "Only an open invoice with no applied payment or credit can be voided.");
+      const [allocation] = await transaction.select({ id: paymentAllocations.id }).from(paymentAllocations).where(eq(paymentAllocations.invoiceId, invoiceId)).limit(1);
+      if (allocation) throw new AppError(409, "INVOICE_VOID_NOT_ELIGIBLE", "This invoice has allocation history and cannot be voided.");
+      const [existing] = await transaction.select({ id: invoiceVoids.id }).from(invoiceVoids).where(eq(invoiceVoids.invoiceId, invoiceId)).limit(1);
+      if (existing) throw new AppError(409, "INVOICE_ALREADY_VOID", "This invoice is already voided.");
+      await transaction.update(invoices).set({ status: "VOID" }).where(eq(invoices.id, invoiceId));
+      await transaction.insert(invoiceVoids).values({ invoiceId, reason: reason.trim(), voidedBy: actor.userId });
+      const ledgerSequence = await nextSequence(transaction, "LEDGER");
+      await transaction.insert(ledgerEntries).values({ sequenceNumber: ledgerSequence, subscriberId: invoice.subscriberId, serviceAccountId: invoice.serviceAccountId, invoiceId, type: "VOID_CREDIT", description: `Void invoice ${invoice.invoiceNumber}`, creditCentavos: invoice.totalCentavos, actorUserId: actor.userId });
+      await transaction.insert(auditLogs).values({ actorUserId: actor.userId, actorSessionId: actor.sessionId, action: "billing.invoice.void", entityType: "invoice", entityId: invoiceId, requestId: actor.requestId ?? null, beforeValues: { status: invoice.status, outstandingCentavos: invoice.totalCentavos.toString() }, afterValues: { status: "VOID", reason: reason.trim(), outstandingCentavos: "0" } });
+      return { invoiceId, invoiceNumber: invoice.invoiceNumber, status: "VOID" as const };
+    });
   }
 
   async getStatement(subscriberId: string) {
@@ -195,5 +237,5 @@ async function nextSequence(transaction: BillingTransaction, code: string): Prom
 }
 
 function serializeInvoice(invoice: typeof invoices.$inferSelect) {
-  return { ...invoice, subtotalCentavos: invoice.subtotalCentavos.toString(), totalCentavos: invoice.totalCentavos.toString(), paidCentavos: invoice.paidCentavos.toString(), outstandingCentavos: (invoice.totalCentavos - invoice.paidCentavos).toString() };
+  return { ...invoice, subtotalCentavos: invoice.subtotalCentavos.toString(), totalCentavos: invoice.totalCentavos.toString(), paidCentavos: invoice.paidCentavos.toString(), outstandingCentavos: (invoice.status === "VOID" ? 0n : invoice.totalCentavos - invoice.paidCentavos).toString() };
 }

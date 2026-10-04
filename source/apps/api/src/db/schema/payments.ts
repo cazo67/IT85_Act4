@@ -1,14 +1,15 @@
 import { sql } from "drizzle-orm";
-import { bigint, boolean, check, index, jsonb, pgEnum, pgTable, text, timestamp, uniqueIndex, uuid } from "drizzle-orm/pg-core";
+import { bigint, boolean, check, customType, index, jsonb, pgEnum, pgTable, text, timestamp, uniqueIndex, uuid } from "drizzle-orm/pg-core";
 
 import { invoices } from "./billing.js";
 import { users } from "./security.js";
 import { serviceAccounts, subscribers } from "./subscribers.js";
 
-export const paymentMethod = pgEnum("payment_method", ["CASH", "GCASH"]);
+export const paymentMethod = pgEnum("payment_method", ["CASH", "GCASH", "BANK_TRANSFER", "CHEQUE", "OTHER"]);
 export const paymentStatus = pgEnum("payment_status", ["POSTED", "REVERSED"]);
-export const creditStatus = pgEnum("credit_status", ["AVAILABLE", "CONSUMED", "REFUNDED"]);
+export const creditStatus = pgEnum("credit_status", ["AVAILABLE", "CONSUMED", "REFUNDED", "REVERSED"]);
 export const proofStatus = pgEnum("payment_proof_status", ["PENDING", "VERIFIED", "REJECTED"]);
+const bytea = customType<{ data: Buffer; driverData: Buffer }>({ dataType: () => "bytea" });
 export const ledgerEntryType = pgEnum("ledger_entry_type", ["INVOICE_DEBIT", "PAYMENT_CREDIT", "PAYMENT_REVERSAL_DEBIT", "ADJUSTMENT_DEBIT", "ADJUSTMENT_CREDIT", "VOID_CREDIT"]);
 
 export const payments = pgTable("payments", {
@@ -20,6 +21,7 @@ export const payments = pgTable("payments", {
   amountCentavos: bigint("amount_centavos", { mode: "bigint" }).notNull(),
   externalReference: text("external_reference"),
   normalizedExternalReference: text("normalized_external_reference"),
+  otherDescription: text("other_description"),
   status: paymentStatus("status").notNull().default("POSTED"),
   paidAt: timestamp("paid_at", { withTimezone: true }).notNull().defaultNow(),
   postedBy: uuid("posted_by").references(() => users.id, { onDelete: "restrict" }),
@@ -29,9 +31,10 @@ export const payments = pgTable("payments", {
   uniqueIndex("payments_number_uidx").on(table.paymentNumber),
   uniqueIndex("payments_command_uidx").on(table.commandKey),
   uniqueIndex("payments_gcash_reference_uidx").on(table.normalizedExternalReference).where(sql`${table.method} = 'GCASH' and ${table.normalizedExternalReference} is not null`),
+  uniqueIndex("payments_other_method_reference_uidx").on(table.method, table.normalizedExternalReference).where(sql`${table.method} in ('BANK_TRANSFER', 'CHEQUE', 'OTHER')`),
   index("payments_subscriber_time_idx").on(table.subscriberId, table.paidAt),
   check("payments_amount_positive_chk", sql`${table.amountCentavos} > 0`),
-  check("payments_reference_chk", sql`(${table.method} = 'CASH' and ${table.normalizedExternalReference} is null) or (${table.method} = 'GCASH' and ${table.normalizedExternalReference} is not null)`)
+  check("payments_reference_chk", sql`(${table.method} = 'CASH' and ${table.externalReference} is null and ${table.normalizedExternalReference} is null and ${table.otherDescription} is null) or (${table.method} in ('GCASH', 'BANK_TRANSFER', 'CHEQUE') and ${table.externalReference} is not null and ${table.normalizedExternalReference} is not null and ${table.otherDescription} is null) or (${table.method} = 'OTHER' and ${table.externalReference} is not null and ${table.normalizedExternalReference} is not null and ${table.otherDescription} is not null and length(trim(${table.otherDescription})) between 10 and 200)`)
 ]);
 
 export const ledgerEntries = pgTable("ledger_entries", {
@@ -60,6 +63,7 @@ export const paymentAllocations = pgTable("payment_allocations", {
   paymentId: uuid("payment_id").notNull().references(() => payments.id, { onDelete: "restrict" }),
   invoiceId: uuid("invoice_id").notNull().references(() => invoices.id, { onDelete: "restrict" }),
   amountCentavos: bigint("amount_centavos", { mode: "bigint" }).notNull(),
+  fromCredit: boolean("from_credit").notNull().default(false),
   isReversed: boolean("is_reversed").notNull().default(false),
   reversedAt: timestamp("reversed_at", { withTimezone: true }),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow()
@@ -76,6 +80,7 @@ export const subscriberCredits = pgTable("subscriber_credits", {
   originalCentavos: bigint("original_centavos", { mode: "bigint" }).notNull(),
   remainingCentavos: bigint("remaining_centavos", { mode: "bigint" }).notNull(),
   status: creditStatus("status").notNull().default("AVAILABLE"),
+  reversedAt: timestamp("reversed_at", { withTimezone: true }),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow()
 }, (table) => [
@@ -113,12 +118,16 @@ export const paymentReversals = pgTable("payment_reversals", {
 export const paymentProofs = pgTable("payment_proofs", {
   id: uuid("id").defaultRandom().primaryKey(),
   subscriberId: uuid("subscriber_id").notNull().references(() => subscribers.id, { onDelete: "restrict" }),
+  amountCentavos: bigint("amount_centavos", { mode: "bigint" }).notNull(),
+  senderName: text("sender_name").notNull(),
+  senderMobile: text("sender_mobile").notNull(),
   externalReference: text("external_reference").notNull(),
   normalizedExternalReference: text("normalized_external_reference").notNull(),
   originalFileName: text("original_file_name").notNull(),
   storageKey: text("storage_key").notNull(),
   mediaType: text("media_type").notNull(),
   sizeBytes: bigint("size_bytes", { mode: "bigint" }).notNull(),
+  proofData: bytea("proof_data").notNull(),
   sha256: text("sha256").notNull(),
   status: proofStatus("status").notNull().default("PENDING"),
   uploadedBy: uuid("uploaded_by").references(() => users.id, { onDelete: "restrict" }),
@@ -130,5 +139,7 @@ export const paymentProofs = pgTable("payment_proofs", {
   uniqueIndex("payment_proofs_reference_uidx").on(table.normalizedExternalReference),
   uniqueIndex("payment_proofs_storage_key_uidx").on(table.storageKey),
   index("payment_proofs_status_time_idx").on(table.status, table.createdAt),
-  check("payment_proofs_size_chk", sql`${table.sizeBytes} > 0`)
+  check("payment_proofs_size_chk", sql`${table.sizeBytes} > 0 and ${table.sizeBytes} <= 2097152`),
+  check("payment_proofs_amount_chk", sql`${table.amountCentavos} > 0`),
+  check("payment_proofs_mobile_chk", sql`${table.senderMobile} ~ '^09[0-9]{9}$'`)
 ]);

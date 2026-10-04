@@ -12,6 +12,11 @@ export const queryKeys = {
     invoice: (id: string) => ["billing", "invoice", id] as const
   },
   payments: ["payments"] as const,
+  gcashProofs: {
+    list: (status: string, page: number) => ["gcash-proofs", "list", status, page] as const,
+    mine: (page: number) => ["my-gcash-proofs", page] as const,
+    detail: (id: string) => ["gcash-proofs", "detail", id] as const
+  },
   receivables: (asOf: string, overdueOnly: boolean) => ["receivables", { asOf, overdueOnly }] as const,
   collections: ["collections"] as const,
   collectorAssignments: (serviceAccountId: string) => ["collections", "assignments", serviceAccountId] as const,

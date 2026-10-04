@@ -49,6 +49,17 @@ export const invoices = pgTable("invoices", {
   check("invoices_amounts_chk", sql`${table.subtotalCentavos} > 0 and ${table.totalCentavos} > 0 and ${table.totalCentavos} = ${table.subtotalCentavos} and ${table.paidCentavos} >= 0 and ${table.paidCentavos} <= ${table.totalCentavos}`)
 ]);
 
+export const invoiceVoids = pgTable("invoice_voids", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  invoiceId: uuid("invoice_id").notNull().references(() => invoices.id, { onDelete: "restrict" }),
+  reason: text("reason").notNull(),
+  voidedBy: uuid("voided_by").references(() => users.id, { onDelete: "restrict" }),
+  voidedAt: timestamp("voided_at", { withTimezone: true }).notNull().defaultNow()
+}, (table) => [
+  uniqueIndex("invoice_voids_invoice_uidx").on(table.invoiceId),
+  check("invoice_voids_reason_chk", sql`length(trim(${table.reason})) between 10 and 500`)
+]);
+
 export const invoiceItems = pgTable("invoice_items", {
   id: uuid("id").defaultRandom().primaryKey(),
   invoiceId: uuid("invoice_id").notNull().references(() => invoices.id, { onDelete: "restrict" }),

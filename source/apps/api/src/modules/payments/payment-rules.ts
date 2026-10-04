@@ -34,5 +34,17 @@ export function allocateOldestFirst(amountCentavos: bigint, invoices: readonly O
 }
 
 export function normalizeExternalReference(value: string): string {
-  return value.trim().toLocaleUpperCase("en-US").replace(/[^A-Z0-9]/g, "");
+  const normalized = normalizeReferenceText(value);
+  if (!/^[A-Z0-9]{6,40}$/.test(normalized)) {
+    throw new AppError(400, "INVALID_GCASH_REFERENCE", "GCash reference must contain 6–40 letters or digits; only spaces and hyphens may be removed.");
+  }
+  return normalized;
 }
+
+export function normalizePaymentReference(value: string): string {
+  const normalized = normalizeReferenceText(value);
+  if (!/^[A-Z0-9]{6,40}$/.test(normalized)) throw new AppError(400, "INVALID_PAYMENT_REFERENCE", "Payment reference must contain 6–40 letters or digits; only spaces and hyphens may be removed.");
+  return normalized;
+}
+
+function normalizeReferenceText(value: string): string { return value.trim().toUpperCase().replace(/[ -]/g, ""); }

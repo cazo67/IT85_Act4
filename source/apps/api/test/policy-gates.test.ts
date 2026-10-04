@@ -19,7 +19,24 @@ afterEach(async () => {
   await Promise.all(apps.splice(0).map((app) => app.close()));
 });
 
-describe("unapproved policy gates", () => {
+describe("financial route guards", () => {
+  it.each(["BANK_TRANSFER", "CHEQUE", "OTHER"])("rejects unconfirmed %s posting before touching the database", async (method) => {
+    const { app, token } = await createApp(["payment.create"]);
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/v1/payments",
+      headers: bearer(token),
+      payload: {
+        subscriberId: "00000000-0000-4000-8000-000000001001",
+        amountCentavos: "100000",
+        method,
+        commandKey: "00000000-0000-4000-8000-000000009002"
+      }
+    });
+
+    expect(response.statusCode).toBe(400);
+  });
+
   it("blocks GCash posting before touching the database", async () => {
     const { app, token } = await createApp(["payment.create"]);
     const response = await app.inject({
@@ -38,15 +55,15 @@ describe("unapproved policy gates", () => {
     expect(response.json().error.code).toBe("GCASH_POLICY_NOT_APPROVED");
   });
 
-  it("blocks GCash proof upload with an explicit policy error", async () => {
+  it("rejects incomplete GCash proof upload before touching the database", async () => {
     const { app, token } = await createApp(["payment.create"]);
     const response = await app.inject({ method: "POST", url: "/api/v1/gcash/proofs", headers: bearer(token) });
 
-    expect(response.statusCode).toBe(409);
-    expect(response.json().error.code).toBe("GCASH_POLICY_NOT_APPROVED");
+    expect(response.statusCode).toBe(400);
+    expect(response.json().error.code).toBe("VALIDATION_ERROR");
   });
 
-  it("blocks invoice voiding while preserving permission enforcement", async () => {
+  it("routes an authorized, reasoned invoice void to the billing service", async () => {
     const { app, token } = await createApp(["billing.adjust"]);
     const response = await app.inject({
       method: "POST",
@@ -55,11 +72,11 @@ describe("unapproved policy gates", () => {
       payload: { reason: "Approved test reason only" }
     });
 
-    expect(response.statusCode).toBe(409);
-    expect(response.json().error.code).toBe("POLICY_NOT_APPROVED");
+    expect(response.statusCode).toBe(200);
+    expect(response.json().data.status).toBe("VOID");
   });
 
-  it("rejects invoice voiding before revealing its policy state", async () => {
+  it("rejects invoice voiding before revealing its record state", async () => {
     const { app, token } = await createApp(["billing.view"]);
     const response = await app.inject({
       method: "POST",
@@ -92,7 +109,7 @@ async function createApp(permissions: MemoryUser["permissions"]) {
     allowedOrigins: [],
     authService,
     paymentService: new PaymentService({} as BcisDatabase),
-    billingService: {} as BillingService
+    billingService: { voidInvoice: async (invoiceId: string) => ({ invoiceId, invoiceNumber: "INV-TEST", status: "VOID" as const }) } as unknown as BillingService
   });
   apps.push(app);
   const login = await app.inject({ method: "POST", url: "/api/v1/auth/login", payload: { username: "owner", password: "Correct-Horse-2026!" } });

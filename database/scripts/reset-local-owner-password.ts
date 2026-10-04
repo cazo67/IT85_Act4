@@ -27,7 +27,7 @@ try {
   try {
     await connection.query("begin");
     const targetCheck = await connection.query("select current_database() as database_name, current_user as role_name, (select count(*)::int from drizzle.__drizzle_migrations) as migrations");
-    if (targetCheck.rows[0]?.database_name !== "bcis" || targetCheck.rows[0]?.role_name !== "bcis_app" || ![13, 14, 15].includes(targetCheck.rows[0]?.migrations)) {
+    if (targetCheck.rows[0]?.database_name !== "bcis" || targetCheck.rows[0]?.role_name !== "bcis_app" || ![13, 14, 15, 16, 17, 18, 19].includes(targetCheck.rows[0]?.migrations)) {
       throw new Error("The local BCIS database identity or migration count is unexpected.");
     }
     const owner = await connection.query("select u.id from users u join user_roles ur on ur.user_id = u.id join roles r on r.id = ur.role_id where u.normalized_username = 'owner' and r.code = 'OWNER' and u.is_active = true for update of u");

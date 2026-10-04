@@ -113,6 +113,7 @@ export interface InvoiceListItem {
 export interface InvoiceDetail {
   invoice: InvoiceListItem;
   items: Array<{ id: string; type: "PLAN_SERVICE" | "ADJUSTMENT"; description: string; quantity: number; unitAmountCentavos: string; totalCentavos: string }>;
+  voidRecord: { id: string; reason: string; voidedAt: string; voidedBy: string | null } | null;
 }
 
 export interface PaymentPreview {
@@ -128,6 +129,23 @@ export interface PaymentResult {
   payment: { id: string; paymentNumber: string; subscriberId: string; method: string; amountCentavos: string; status: string; paidAt: string };
   receipt: { receiptNumber: string; snapshot: Record<string, unknown>; voidedAt: string | null } | null;
   allocations: Array<{ invoiceNumber: string; amountCentavos: string; isReversed?: boolean }>;
+}
+
+export interface GcashProof {
+  id: string;
+  subscriberId: string;
+  amountCentavos: string;
+  senderName: string;
+  senderMobile: string;
+  externalReference?: string;
+  normalizedExternalReference: string;
+  originalFileName?: string;
+  mediaType: string;
+  sizeBytes?: string;
+  status: "PENDING" | "REJECTED" | "VERIFIED";
+  reviewReason?: string | null;
+  createdAt: string;
+  reviewedAt: string | null;
 }
 
 export interface CollectionBatch {
@@ -151,6 +169,7 @@ export interface CollectionBatchDetail {
   accounts: Array<{ id: string; accountNumberSnapshot: string; subscriberNameSnapshot: string; serviceNumberSnapshot: string; addressSnapshot: string | null; currentBillCentavosSnapshot: string | null; arrearsCentavosSnapshot: string | null; expectedCentavos: string; collectedCentavos: string; status: string }>;
   entries: Array<{ id: string; amountCentavos: string }>;
   remittance: null | { remittanceNumber: string; remittedCashCentavos: string; differenceCentavos: string; notes: string };
+  correction: null | { correctedCashCentavos: string; reason: string; correctedAt: string; correctedBy: string | null };
   reconciliation: null | { differenceCentavos: string; notes: string };
 }
 
@@ -265,11 +284,11 @@ export interface DashboardData {
   suspendedServiceCount: number;
   openBatchCount: number;
   aging: AgingSummary;
-  paymentMethods: Array<{ method: "CASH" | "GCASH"; amountCentavos: string; paymentCount: number }>;
+  paymentMethods: Array<{ method: "CASH" | "GCASH" | "BANK_TRANSFER" | "CHEQUE" | "OTHER"; amountCentavos: string; paymentCount: number }>;
   collectorPerformance: Array<{ collectorId: string; collectorName: string; batchCount: number; expectedCentavos: string; collectedCentavos: string; remittedCentavos: string }>;
   overdueAlerts: Array<{ subscriberId: string; accountNumber: string; subscriberName: string; serviceAccountNumber: string; oldestDueDate: string; maximumDaysPastDue: number; totalArrearsCentavos: string }>;
   hasMoreOverdue: boolean;
-  recentPayments: Array<{ paymentNumber: string; paidAt: string; method: "CASH" | "GCASH"; amountCentavos: string; accountNumber: string; subscriberName: string }>;
+  recentPayments: Array<{ paymentNumber: string; paidAt: string; method: "CASH" | "GCASH" | "BANK_TRANSFER" | "CHEQUE" | "OTHER"; amountCentavos: string; accountNumber: string; subscriberName: string }>;
 }
 
 export interface ReportDocument {
@@ -364,6 +383,10 @@ export function createUser(token: string, input: { username: string; displayName
 
 export function setUserActive(token: string, userId: string, isActive: boolean): Promise<void> {
   return request<void>(`/api/v1/users/${userId}/active`, { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify({ isActive }) }, token);
+}
+
+export function setUserRoles(token: string, userId: string, roles: string[]): Promise<void> {
+  return request<void>(`/api/v1/users/${userId}/roles`, { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ roles }) }, token);
 }
 
 export function setRolePermissions(token: string, roleId: string, permissions: string[]): Promise<void> {
@@ -484,6 +507,10 @@ export function getInvoice(token: string, invoiceId: string): Promise<InvoiceDet
   return request(`/api/v1/invoices/${invoiceId}`, { method: "GET" }, token);
 }
 
+export function voidInvoice(token: string, invoiceId: string, reason: string): Promise<{ invoiceId: string; invoiceNumber: string; status: "VOID" }> {
+  return request(`/api/v1/invoices/${invoiceId}/void`, jsonRequest("POST", { reason }), token);
+}
+
 export function getStatement(token: string, subscriberId: string): Promise<{ entries: Array<Record<string, unknown>>; closingBalanceCentavos: string }> {
   return request(`/api/v1/subscribers/${subscriberId}/statement`, { method: "GET" }, token);
 }
@@ -509,12 +536,12 @@ export function getPaymentPreview(token: string, subscriberId: string, amountCen
   return request(`/api/v1/payments/preview?subscriberId=${encodeURIComponent(subscriberId)}&amountCentavos=${encodeURIComponent(amountCentavos)}`, { method: "GET" }, token);
 }
 
-export function postPayment(token: string, input: { subscriberId: string; amountCentavos: string; method: "CASH"; commandKey: string }): Promise<PaymentResult> {
+export function postPayment(token: string, input: { subscriberId: string; amountCentavos: string; method: "CASH" | "BANK_TRANSFER" | "CHEQUE" | "OTHER"; commandKey: string; externalReference?: string; otherDescription?: string; receivedConfirmed?: true }): Promise<PaymentResult> {
   return request("/api/v1/payments", jsonRequest("POST", input), token);
 }
 
-export function listPayments(token: string, page = 1, subscriberId?: string): Promise<{ items: Array<{ payment: PaymentResult["payment"]; receiptNumber: string | null }>; page: number; pageSize: number; hasMore: boolean }> {
-  return request(`/api/v1/payments?${new URLSearchParams({ page: String(page), pageSize: "50", ...(subscriberId ? { subscriberId } : {}) })}`, { method: "GET" }, token);
+export function listPayments(token: string, page = 1, subscriberId?: string, search?: string): Promise<{ items: Array<{ payment: PaymentResult["payment"]; receiptNumber: string | null }>; page: number; pageSize: number; hasMore: boolean }> {
+  return request(`/api/v1/payments?${new URLSearchParams({ page: String(page), pageSize: "50", ...(subscriberId ? { subscriberId } : {}), ...(search ? { search } : {}) })}`, { method: "GET" }, token);
 }
 
 export function getPayment(token: string, paymentId: string): Promise<PaymentResult> {
@@ -523,6 +550,47 @@ export function getPayment(token: string, paymentId: string): Promise<PaymentRes
 
 export function reversePayment(token: string, paymentId: string, reason: string) {
   return request(`/api/v1/payments/${paymentId}/reverse`, jsonRequest("POST", { reason }), token);
+}
+
+export function listGcashProofs(token: string, status: GcashProof["status"], page = 1): Promise<{ items: GcashProof[]; page: number; pageSize: number; hasMore: boolean }> {
+  return request(`/api/v1/gcash/proofs?${new URLSearchParams({ status, page: String(page), pageSize: "50" })}`, { method: "GET" }, token);
+}
+
+export function listMyGcashProofs(token: string, page = 1): Promise<{ items: GcashProof[]; page: number; pageSize: number; hasMore: boolean }> {
+  return request(`/api/v1/gcash/my-proofs?${new URLSearchParams({ page: String(page), pageSize: "50" })}`, { method: "GET" }, token);
+}
+
+export function submitGcashProof(token: string, input: { subscriberId: string; amountCentavos: string; senderName: string; senderMobile: string; externalReference: string; originalFileName: string; imageBase64: string }): Promise<GcashProof> {
+  return request("/api/v1/gcash/proofs", jsonRequest("POST", input), token);
+}
+
+export function resubmitGcashProof(token: string, id: string, input: { amountCentavos: string; senderName: string; senderMobile: string; originalFileName: string; imageBase64: string }): Promise<GcashProof> {
+  return request(`/api/v1/gcash/proofs/${id}/resubmit`, jsonRequest("POST", input), token);
+}
+
+export function verifyGcashProof(token: string, id: string): Promise<PaymentResult> {
+  return request(`/api/v1/gcash/proofs/${id}/verify`, jsonRequest("POST", { receiverHistoryConfirmed: true }), token);
+}
+
+export function getGcashProof(token: string, id: string): Promise<GcashProof> {
+  return request(`/api/v1/gcash/proofs/${id}`, { method: "GET" }, token);
+}
+
+export async function getGcashProofImage(token: string, id: string): Promise<Blob> {
+  const response = await fetch(`${apiBaseUrl}/api/v1/gcash/proofs/${id}/image`, { headers: { authorization: `Bearer ${token}` }, cache: "no-store" });
+  if (!response.ok) {
+    const payload = await response.json() as { error?: { code: string; message: string } };
+    const error = new ApiError(payload.error?.code ?? "PROOF_IMAGE_FAILED", payload.error?.message ?? "The proof image could not be loaded.", response.status);
+    if (error.code === "AUTHENTICATION_REQUIRED" || error.code === "SESSION_LOCKED" || error.status === 403) sessionFailureHandler?.(token, error);
+    throw error;
+  }
+  const image = await response.blob();
+  if (image.size > 2 * 1024 * 1024 || !["image/png", "image/jpeg"].includes(image.type)) throw new ApiError("INVALID_PROOF_IMAGE", "The server returned an unsupported proof image.", 500);
+  return image;
+}
+
+export function rejectGcashProof(token: string, id: string, reason: string): Promise<{ id: string; status: "REJECTED" }> {
+  return request(`/api/v1/gcash/proofs/${id}/reject`, jsonRequest("POST", { reason }), token);
 }
 
 export function listCollectionBatches(token: string): Promise<Array<{ batch: CollectionBatch; collectorName: string; routeName: string }>> {
@@ -547,6 +615,10 @@ export function recordBatchCollection(token: string, batchId: string, input: { b
 
 export function remitCollectionBatch(token: string, batchId: string, input: { remittedCashCentavos: string; notes: string; version: number }) {
   return request(`/api/v1/collection-batches/${batchId}/remittance`, jsonRequest("POST", input), token);
+}
+
+export function correctCollectionRemittance(token: string, batchId: string, input: { correctedCashCentavos: string; reason: string; cashCountConfirmed: true; version: number }) {
+  return request(`/api/v1/collection-batches/${batchId}/remittance-correction`, jsonRequest("POST", input), token);
 }
 
 export function reconcileCollectionBatch(token: string, batchId: string, notes: string, version: number): Promise<void> {

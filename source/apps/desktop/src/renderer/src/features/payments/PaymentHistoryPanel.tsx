@@ -8,7 +8,7 @@ import { ReceiptView } from "./ReceiptView";
 
 type PaymentRow = { payment: PaymentResult["payment"]; receiptNumber: string | null };
 
-export function PaymentHistoryPanel({ token, canReverse, canPrint }: { token: string; canReverse: boolean; canPrint: boolean }) {
+export function PaymentHistoryPanel({ token, openPaymentId, canReverse, canPrint }: { token: string; openPaymentId?: string | undefined; canReverse: boolean; canPrint: boolean }) {
   const [rows, setRows] = useState<PaymentRow[]>([]);
   const [page, setPage] = useState(1);
   const [hasMore, setHasMore] = useState(false);
@@ -34,6 +34,13 @@ export function PaymentHistoryPanel({ token, canReverse, canPrint }: { token: st
     finally { setLoading(false); }
   }, [page, subscriber?.id, token]);
   useEffect(() => { void load(); }, [load]);
+  useEffect(() => {
+    if (!openPaymentId) return;
+    let active = true;
+    setBusy(true);
+    void getPayment(token, openPaymentId).then((result) => { if (active) { setDetail(result); setError(""); } }).catch((caught) => { if (active) setError(message(caught)); }).finally(() => { if (active) setBusy(false); });
+    return () => { active = false; };
+  }, [openPaymentId, token]);
 
   async function searchSubscribers(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();

@@ -19,9 +19,9 @@ async function main() {
   let client: CdpClient | undefined;
   try {
     const identity = await pool.query("select current_database() as name, (select count(*)::int from drizzle.__drizzle_migrations) as migrations");
-    if (identity.rows[0]?.name !== "bcis_test" || identity.rows[0]?.migrations !== 15) throw new Error("The isolated test database is not ready.");
+    if (identity.rows[0]?.name !== "bcis_test" || identity.rows[0]?.migrations !== 19) throw new Error("The isolated test database is not ready.");
     if ((await apiFetch("http://127.0.0.1:4110/api/v1/health/ready")).status !== 200) throw new Error("The isolated test API is not ready on 4110.");
-    const createActor = async (roleCode: "OWNER" | "VIEWER" | "COLLECTION_SUPERVISOR") => {
+    const createActor = async (roleCode: "OWNER" | "VIEWER" | "COLLECTION_SUPERVISOR" | "ACCOUNTING_AUDITOR") => {
       const username = `gate3_${roleCode.toLowerCase()}_${randomUUID()}`;
       const password = randomBytes(24).toString("base64url");
       const role = await pool.query("select id from roles where code = $1", [roleCode]);
@@ -34,13 +34,402 @@ async function main() {
     };
     const owner = await createActor("OWNER");
     const viewer = await createActor("VIEWER");
-    client = await CdpClient.connect(9236);
+    client = await CdpClient.connect(9236, process.argv.includes("--production-preview-only") ? "file:" : "http://localhost:5173");
     await client.evaluate("localStorage.setItem('bcis-sidebar-collapsed-v1', 'false'); location.reload(); true");
     await waitFor(client, "document.querySelector('#username') !== null");
     await signIn(client, owner.username, owner.password);
     try { await waitFor(client, "document.body.innerText.includes('Authenticated BCIS workspace')"); }
     catch (error) { throw new Error(`Owner login screen: ${JSON.stringify(await client.evaluate("document.body.innerText.slice(0, 1000)"))}`, { cause: error }); }
     expectDom(await client.evaluate("Boolean([...document.querySelectorAll('nav[aria-label=\"Main navigation\"] button')].find((button) => button.textContent?.trim() === 'User accounts'))"), "Owner admin navigation is missing.");
+
+    if (process.argv.includes("--production-preview-only")) {
+      await waitFor(client, "document.body.innerText.includes('Fastify API') && document.body.innerText.includes('PostgreSQL') && document.body.innerText.includes('Ready')");
+      await click(client, "Submit GCash proof");
+      await waitFor(client, "document.querySelector('input[aria-label=\"GCash proof image\"]') !== null");
+      await click(client, "GCash proofs");
+      await waitFor(client, "document.querySelector('select[aria-label=\"GCash proof status\"]') !== null");
+      expectDom(await client.evaluate("document.documentElement.scrollWidth <= window.innerWidth"), "Production-preview GCash review overflowed.");
+      await click(client, "Sign out");
+      await waitFor(client, "document.querySelector('#username') !== null");
+      console.info(JSON.stringify({ productionBuiltFileRenderer: true, apiAndDatabaseReady: true, ownerLogin: true, gcashNavigation: true, noHorizontalOverflow: true, signOut: true, installedClient: "not verified" }));
+      return;
+    }
+
+    if (process.argv.includes("--gcash-responsive-only")) {
+      await client.command("Emulation.setDeviceMetricsOverride", { width: 700, height: 800, deviceScaleFactor: 1, mobile: false });
+      await waitFor(client, "window.innerWidth < 1024 && document.querySelector('button[aria-label=\"Open navigation\"]') !== null");
+      const viewportWidth = await client.evaluate("window.innerWidth");
+      const openDrawer = async () => {
+        await clickAria(client!, "Open navigation");
+        try { await waitFor(client!, "document.querySelector('aside[role=\"dialog\"][aria-modal=\"true\"]') !== null && document.querySelector('header')?.closest('[inert]') !== null && document.activeElement?.getAttribute('aria-label') === 'Close navigation'"); }
+        catch (error) { throw new Error(`Drawer state: ${JSON.stringify(await client!.evaluate("({ dialog: Boolean(document.querySelector('aside[role=\"dialog\"]')), activeLabel: document.activeElement?.getAttribute('aria-label'), activeText: document.activeElement?.textContent?.trim().slice(0, 80), body: document.body.innerText.slice(0, 250) })"))}`, { cause: error }); }
+      };
+      const noOverflow = async (label: string) => expectDom(await client!.evaluate("document.documentElement.scrollWidth <= window.innerWidth"), `${label} has horizontal overflow at the narrow viewport.`);
+      await openDrawer();
+      await client.command("Input.dispatchKeyEvent", { type: "keyDown", key: "Tab", code: "Tab", windowsVirtualKeyCode: 9, modifiers: 8 });
+      expectDom(await client.evaluate("(() => { const controls = [...document.querySelectorAll('aside[role=\"dialog\"] button:not([disabled])')].filter((item) => item.getClientRects().length > 0); return document.activeElement === controls.at(-1); })()"), "Shift+Tab did not wrap to the last drawer control.");
+      await client.command("Input.dispatchKeyEvent", { type: "keyUp", key: "Tab", code: "Tab", windowsVirtualKeyCode: 9, modifiers: 8 });
+      await client.command("Input.dispatchKeyEvent", { type: "keyDown", key: "Tab", code: "Tab", windowsVirtualKeyCode: 9 });
+      expectDom(await client.evaluate("document.activeElement?.getAttribute('aria-label') === 'Close navigation'"), "Tab did not wrap to the first drawer control.");
+      await client.command("Input.dispatchKeyEvent", { type: "keyUp", key: "Tab", code: "Tab", windowsVirtualKeyCode: 9 });
+      await client.command("Input.dispatchKeyEvent", { type: "keyDown", key: "Escape", code: "Escape", windowsVirtualKeyCode: 27 });
+      await waitFor(client, "document.querySelector('aside[role=\"dialog\"]') === null && document.querySelector('header')?.closest('[inert]') === null && document.activeElement?.getAttribute('aria-label') === 'Open navigation'");
+      await openDrawer();
+      await click(client, "Submit GCash proof");
+      await waitFor(client, "document.querySelector('input[aria-label=\"GCash proof image\"]') !== null");
+      await noOverflow("GCash submission");
+      await openDrawer();
+      await click(client, "GCash proofs");
+      await waitFor(client, "document.querySelector('select[aria-label=\"GCash proof status\"]') !== null");
+      await noOverflow("GCash review");
+      await client.command("Emulation.clearDeviceMetricsOverride");
+      console.info(JSON.stringify({ gcashNarrowWindow: true, viewportWidth, drawerInitialFocus: true, drawerTabWrap: true, drawerEscape: true, drawerFocusRestoration: true, noHorizontalOverflow: true }));
+      return;
+    }
+
+    if (process.argv.includes("--gcash-restart-only")) {
+      const reference = process.argv.find((argument) => argument.startsWith("--expected-gcash-ref="))?.split("=")[1];
+      if (!reference || !/^EL[A-F0-9]{12}$/.test(reference)) throw new Error("A synthetic GCash reference from the prior smoke is required.");
+      const persisted = await pool.query("select p.id, p.payment_number, p.status, p.amount_centavos, p.paid_at::date::text as paid_date, r.receipt_number, r.voided_at, c.status as credit_status, c.remaining_centavos, proof.status as proof_status, s.id as subscriber_id, s.account_number, pr.reversed_at::date::text as reversed_date from payments p join receipts r on r.payment_id = p.id join subscriber_credits c on c.source_payment_id = p.id join payment_proofs proof on proof.normalized_external_reference = p.normalized_external_reference join subscribers s on s.id = p.subscriber_id join payment_reversals pr on pr.payment_id = p.id where p.normalized_external_reference = $1", [reference]);
+      const row = persisted.rows[0] as { id: string; payment_number: string; status: string; amount_centavos: string; paid_date: string; receipt_number: string; voided_at: Date | null; credit_status: string; remaining_centavos: string; proof_status: string; subscriber_id: string; account_number: string; reversed_date: string } | undefined;
+      if (persisted.rowCount !== 1 || !row || row.status !== "REVERSED" || row.amount_centavos !== "12345" || !row.voided_at || row.credit_status !== "REVERSED" || row.remaining_centavos !== "0" || row.proof_status !== "VERIFIED") throw new Error("GCash reversal state did not survive restart.");
+      const ledger = await pool.query("select coalesce(sum(debit_centavos - credit_centavos), 0)::text as balance from ledger_entries where subscriber_id = $1", [row.subscriber_id]);
+      if (ledger.rows[0]?.balance !== "-1001") throw new Error("GCash ledger balance changed across restart.");
+      await click(client, "Payment history");
+      await fill(client, 'input[aria-label="Search payment subscriber"]', row.account_number);
+      await click(client, "Search subscribers");
+      await waitFor(client, `Boolean([...document.querySelectorAll('button')].find((button) => button.textContent?.includes(${JSON.stringify(row.account_number)}) && button.textContent?.includes('Electron GCash')))`);
+      await client.evaluate(`(() => { const button = [...document.querySelectorAll('button')].find((item) => item.textContent?.includes(${JSON.stringify(row.account_number)}) && item.textContent?.includes('Electron GCash')); if (!button) throw new Error('Subscriber choice missing'); button.click(); return true; })()`);
+      await waitFor(client, `document.querySelector('button[aria-label=${JSON.stringify(`View payment ${row.payment_number}`)}]') !== null`);
+      await clickAria(client, `View payment ${row.payment_number}`);
+      await waitFor(client, `document.body.innerText.includes('VOIDED') && document.body.innerText.includes('GCash reference') && document.body.innerText.includes(${JSON.stringify(reference)})`);
+      await click(client, "Reports");
+      await waitFor(client, "[...document.querySelectorAll('button')].some((item) => item.textContent?.trim() === 'Payment reversals and voided receipts')");
+      await click(client, "Payment reversals and voided receipts");
+      await fillReportDate(client, 0, row.reversed_date);
+      await fillReportDate(client, 1, row.reversed_date);
+      await click(client, "Preview");
+      await waitFor(client, `document.body.innerText.includes(${JSON.stringify(row.payment_number)}) && document.body.innerText.includes('GCASH') && document.body.innerText.includes('VOIDED')`);
+      const apiLogin = await apiFetch("http://127.0.0.1:4110/api/v1/auth/login", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(owner) });
+      if (apiLogin.status !== 200) throw new Error("Restart Owner API login failed.");
+      const ownerToken = ((await apiLogin.json()) as { data: { token: string } }).data.token;
+      const collection = await apiFetch(`http://127.0.0.1:4110/api/v1/reports/daily-collections/preview?dateFrom=${row.paid_date}&dateTo=${row.paid_date}`, { headers: { authorization: `Bearer ${ownerToken}` } });
+      if (collection.status !== 200) throw new Error("Restart collection report failed.");
+      const collectionRows = ((await collection.json()) as { data: { rows: Array<{ paymentNumber: string; accountNumber: string; amountCentavos: string }> } }).data.rows;
+      if (collectionRows.some((item) => item.paymentNumber === row.payment_number) || !collectionRows.some((item) => item.accountNumber === row.account_number && item.amountCentavos === "1001")) throw new Error("Restart collection report did not exclude the reversed payment or include the remaining one.");
+      expectDom(await client.evaluate("document.documentElement.scrollWidth <= window.innerWidth"), "Restart GCash report workspace has horizontal overflow.");
+      console.info(JSON.stringify({ gcashRestartPersistence: true, voidedReceipt: true, ledgerBalanceCentavos: "-1001", reversalReport: true, currentCollectionReport: true, noHorizontalOverflow: true, reference }));
+      return;
+    }
+
+    if (process.argv.includes("--gcash-workflow-only")) {
+      const apiLogin = await apiFetch("http://127.0.0.1:4110/api/v1/auth/login", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(owner) });
+      if (apiLogin.status !== 200) throw new Error("Synthetic Owner API login failed.");
+      const ownerToken = ((await apiLogin.json()) as { data: { token: string } }).data.token;
+      const created = await apiFetch("http://127.0.0.1:4110/api/v1/subscribers", { method: "POST", headers: { "content-type": "application/json", authorization: `Bearer ${ownerToken}` }, body: JSON.stringify({ firstName: "Electron", lastName: "GCash", billingDay: 1, dueDay: 15, addresses: [{ type: "SERVICE", line1: "9 Test Street", barangay: "Test Barangay", cityMunicipality: "Test City", province: "Bukidnon", isPrimary: true }], contacts: [{ type: "MOBILE", value: "09170000006", isPrimary: true }] }) });
+      if (created.status !== 200) throw new Error(`Synthetic subscriber creation failed: ${created.status}`);
+      const subscriber = ((await created.json()) as { data: { id: string; accountNumber: string } }).data;
+      const reference = `EL${randomUUID().replaceAll("-", "").slice(0, 12).toUpperCase()}`;
+      await click(client, "Submit GCash proof");
+      await fill(client, 'input[aria-label="Find GCash subscriber"]', subscriber.accountNumber);
+      await click(client, "Search subscriber");
+      await waitFor(client, `Boolean([...document.querySelectorAll('button')].find((button) => button.textContent?.includes(${JSON.stringify(subscriber.accountNumber)}) && button.textContent?.includes('Electron GCash')))`);
+      await click(client, `${subscriber.accountNumber} - Electron GCash`);
+      await fill(client, 'input[aria-label="GCash amount in PHP"]', "123.45");
+      await fill(client, 'input[aria-label="GCash sender name"]', "Synthetic Sender");
+      await fill(client, 'input[aria-label="GCash sender mobile"]', "09171234567");
+      await fill(client, 'input[aria-label="GCash reference"]', reference);
+      await attachSyntheticPng(client);
+      await click(client, "Submit proof for review");
+      await waitFor(client, `document.body.innerText.includes(${JSON.stringify(`Proof ${reference} is pending review`)})`);
+      if ((await pool.query("select count(*)::int as count from payments where subscriber_id = $1", [subscriber.id])).rows[0]?.count !== 0) throw new Error("GCash upload posted a payment before verification.");
+      await click(client, "GCash proofs");
+      await waitFor(client, `document.querySelector('button[aria-label=${JSON.stringify(`Review GCash proof ${reference}`)}]') !== null`);
+      await clickAria(client, `Review GCash proof ${reference}`);
+      await waitFor(client, `Boolean(document.querySelector('img[alt=${JSON.stringify(`GCash proof for reference ${reference}`)}]'))`);
+      expectDom(await client.evaluate("Boolean(document.querySelector('button[disabled]') && document.body.innerText.includes('Review verification and posting'))"), "Verification controls did not start gated.");
+      await client.evaluate("document.querySelector('input[aria-label=\"Receiver GCash history confirmed\"]')?.click(); true");
+      await click(client, "Review verification and posting");
+      await waitFor(client, "document.body.innerText.includes('Confirm verified GCash payment?')");
+      await click(client, "Verify and post GCash payment");
+      await waitFor(client, "document.body.innerText.includes('posted. Receipt')");
+      const posted = await pool.query("select p.id, p.payment_number, p.amount_centavos, p.normalized_external_reference, r.receipt_number from payments p join receipts r on r.payment_id = p.id where p.subscriber_id = $1", [subscriber.id]);
+      if (posted.rowCount !== 1 || posted.rows[0]?.amount_centavos !== "12345" || posted.rows[0]?.normalized_external_reference !== reference) throw new Error("GCash UI posting did not reconcile.");
+      await click(client, "Payment history");
+      await waitFor(client, `document.body.innerText.includes(${JSON.stringify(posted.rows[0]?.payment_number)})`);
+      await clickAria(client, `View payment ${posted.rows[0]?.payment_number}`);
+      await waitFor(client, `document.body.innerText.includes('GCash reference') && document.body.innerText.includes(${JSON.stringify(reference)}) && document.body.innerText.includes(${JSON.stringify(posted.rows[0]?.receipt_number)})`);
+      const correctionReference = `EC${randomUUID().replaceAll("-", "").slice(0, 12).toUpperCase()}`;
+      await click(client, "Submit GCash proof");
+      await fill(client, 'input[aria-label="Find GCash subscriber"]', subscriber.accountNumber);
+      await click(client, "Search subscriber");
+      await waitFor(client, `Boolean([...document.querySelectorAll('button')].find((button) => button.textContent?.trim() === ${JSON.stringify(`${subscriber.accountNumber} - Electron GCash`)}))`);
+      await click(client, `${subscriber.accountNumber} - Electron GCash`);
+      await fill(client, 'input[aria-label="GCash amount in PHP"]', "10.00");
+      await fill(client, 'input[aria-label="GCash sender name"]', "Correction Sender");
+      await fill(client, 'input[aria-label="GCash sender mobile"]', "09171234567");
+      await fill(client, 'input[aria-label="GCash reference"]', correctionReference);
+      await attachSyntheticPng(client);
+      await click(client, "Submit proof for review");
+      await waitFor(client, `document.body.innerText.includes(${JSON.stringify(`Proof ${correctionReference} is pending review`)})`);
+      await click(client, "GCash proofs");
+      await waitFor(client, `document.querySelector('button[aria-label=${JSON.stringify(`Review GCash proof ${correctionReference}`)}]') !== null`);
+      await clickAria(client, `Review GCash proof ${correctionReference}`);
+      await waitFor(client, "document.querySelector('input[aria-label=\"GCash rejection reason\"]') !== null");
+      await fill(client, 'input[aria-label="GCash rejection reason"]', "Synthetic receiver history mismatch");
+      await click(client, "Review rejection");
+      await click(client, "Reject proof");
+      await waitFor(client, "document.body.innerText.includes('REJECTED') && !document.body.innerText.includes('Review rejection')");
+      const rejectedProof = await pool.query("select status, review_reason from payment_proofs where normalized_external_reference = $1", [correctionReference]);
+      if (rejectedProof.rows[0]?.status !== "REJECTED" || rejectedProof.rows[0]?.review_reason !== "Synthetic receiver history mismatch") throw new Error("Synthetic proof rejection did not persist before correction.");
+      await click(client, "Submit GCash proof");
+      try { await waitFor(client, `document.querySelector('button[aria-label=${JSON.stringify(`Correct GCash proof ${correctionReference}`)}]') !== null`); }
+      catch (error) { throw new Error(`Correction screen: ${JSON.stringify(await client.evaluate("document.body.innerText.slice(0, 1600)"))}`, { cause: error }); }
+      await clickAria(client, `Correct GCash proof ${correctionReference}`);
+      await fill(client, 'input[aria-label="GCash amount in PHP"]', "10.01");
+      await attachSyntheticPng(client);
+      await click(client, "Resubmit corrected proof");
+      await waitFor(client, `document.body.innerText.includes(${JSON.stringify(`Proof ${correctionReference} is pending review`)})`);
+      await click(client, "GCash proofs");
+      await waitFor(client, `document.querySelector('button[aria-label=${JSON.stringify(`Review GCash proof ${correctionReference}`)}]') !== null`);
+      await clickAria(client, `Review GCash proof ${correctionReference}`);
+      await waitFor(client, `Boolean(document.querySelector('img[alt=${JSON.stringify(`GCash proof for reference ${correctionReference}`)}]'))`);
+      await client.evaluate("document.querySelector('input[aria-label=\"Receiver GCash history confirmed\"]')?.click(); true");
+      await click(client, "Review verification and posting");
+      await waitFor(client, "document.body.innerText.includes('Confirm verified GCash payment?')");
+      await click(client, "Verify and post GCash payment");
+      await waitFor(client, "document.body.innerText.includes('posted. Receipt')");
+      const corrected = await pool.query("select p.amount_centavos, p.normalized_external_reference, proof.status, proof.review_reason from payments p join payment_proofs proof on proof.normalized_external_reference = p.normalized_external_reference where p.subscriber_id = $1 and p.normalized_external_reference = $2", [subscriber.id, correctionReference]);
+      if (corrected.rowCount !== 1 || corrected.rows[0]?.amount_centavos !== "1001" || corrected.rows[0]?.status !== "VERIFIED" || corrected.rows[0]?.review_reason !== null) throw new Error("Corrected proof did not post the corrected amount once.");
+      await click(client, "Payment history");
+      await waitFor(client, `document.querySelector('button[aria-label=${JSON.stringify(`Reverse payment ${posted.rows[0]?.payment_number}`)}]') !== null`);
+      await clickAria(client, `Reverse payment ${posted.rows[0]?.payment_number}`);
+      await fill(client, 'input[aria-label="Reversal reason"]', "Synthetic GCash record correction");
+      await click(client, "Review reversal");
+      await waitFor(client, "document.body.innerText.includes('Confirm payment reversal?')");
+      await click(client, "Reverse payment");
+      await waitFor(client, `Boolean([...document.querySelectorAll('table tbody tr')].find((row) => row.textContent?.includes(${JSON.stringify(posted.rows[0]?.payment_number)}) && row.textContent?.includes('REVERSED') && row.textContent?.includes('Voided')))`);
+      await clickAria(client, `View payment ${posted.rows[0]?.payment_number}`);
+      await waitFor(client, `document.body.innerText.includes('VOIDED') && document.body.innerText.includes('GCash reference') && document.body.innerText.includes(${JSON.stringify(reference)})`);
+      const reversed = await pool.query("select p.status, r.voided_at, c.status as credit_status, c.remaining_centavos, pr.reversed_at::date::text as reversed_date from payments p join receipts r on r.payment_id = p.id join subscriber_credits c on c.source_payment_id = p.id join payment_reversals pr on pr.payment_id = p.id where p.id = $1", [posted.rows[0]?.id]);
+      if (reversed.rows[0]?.status !== "REVERSED" || !reversed.rows[0]?.voided_at || reversed.rows[0]?.credit_status !== "REVERSED" || reversed.rows[0]?.remaining_centavos !== "0") throw new Error("GCash reversal did not void receipt and credit.");
+      const financialBalance = await pool.query("select coalesce(sum(debit_centavos - credit_centavos), 0)::text as balance from ledger_entries where subscriber_id = $1", [subscriber.id]);
+      if (financialBalance.rows[0]?.balance !== "-1001") throw new Error("GCash reversal lost a centavo or affected the other payment.");
+      const reversalDate = reversed.rows[0]?.reversed_date as string;
+      await click(client, "Reports");
+      await waitFor(client, "[...document.querySelectorAll('button')].some((item) => item.textContent?.trim() === 'Payment reversals and voided receipts')");
+      await click(client, "Payment reversals and voided receipts");
+      await fillReportDate(client, 0, reversalDate);
+      await fillReportDate(client, 1, reversalDate);
+      await click(client, "Preview");
+      await waitFor(client, `document.body.innerText.includes(${JSON.stringify(posted.rows[0]?.payment_number)}) && document.body.innerText.includes('GCASH') && document.body.innerText.includes('VOIDED')`);
+      const reportResponse = await apiFetch(`http://127.0.0.1:4110/api/v1/reports/daily-collections/preview?dateFrom=${reversalDate}&dateTo=${reversalDate}`, { headers: { authorization: `Bearer ${ownerToken}` } });
+      if (reportResponse.status !== 200) throw new Error("GCash collection report was unavailable.");
+      const reportRows = ((await reportResponse.json()) as { data: { rows: Array<{ paymentNumber: string }> } }).data.rows;
+      if (reportRows.some((row) => row.paymentNumber === posted.rows[0]?.payment_number)) throw new Error("Reversed GCash payment remained in current collections.");
+      expectDom(await client.evaluate("document.documentElement.scrollWidth <= window.innerWidth"), "GCash workflow has horizontal overflow.");
+      await click(client, "Sign out");
+      await waitFor(client, "document.querySelector('#username') !== null");
+      await signIn(client, viewer.username, viewer.password);
+      await waitFor(client, "document.body.innerText.includes('Authenticated BCIS workspace')");
+      expectDom(await client.evaluate("![...document.querySelectorAll('nav[aria-label=\"Main navigation\"] button')].some((button) => ['GCash proofs', 'Submit GCash proof'].includes(button.textContent?.trim() ?? ''))"), "Viewer saw GCash actions.");
+      console.info(JSON.stringify({ gcashDesktopUpload: true, pendingNoPayment: true, verifiedPayment: true, receiptHistory: true, rejectedProofCorrection: true, reversedVoidedReconciled: true, reversalReport: true, viewerActionsHidden: true, noHorizontalOverflow: true, reference, correctionReference }));
+      return;
+    }
+
+    if (process.argv.includes("--gcash-review-only")) {
+      const fixture = await pool.query("select id, normalized_external_reference from payment_proofs where status = 'PENDING' order by created_at desc, id desc limit 1");
+      const proofId = fixture.rows[0]?.id as string | undefined;
+      const reference = fixture.rows[0]?.normalized_external_reference as string | undefined;
+      if (!proofId || !reference) throw new Error("A synthetic pending GCash proof fixture is required in bcis_test.");
+      await click(client, "GCash proofs");
+      await waitFor(client, `document.querySelector('button[aria-label=${JSON.stringify(`Review GCash proof ${reference}`)}]') !== null`);
+      await clickAria(client, `Review GCash proof ${reference}`);
+      await waitFor(client, `Boolean(document.querySelector('img[alt=${JSON.stringify(`GCash proof for reference ${reference}`)}]'))`);
+      await fill(client, 'input[aria-label="GCash rejection reason"]', "Reference missing in synthetic receiver history");
+      await click(client, "Review rejection");
+      await waitFor(client, "document.body.innerText.includes('Confirm GCash proof rejection?')");
+      await click(client, "Reject proof");
+      await waitFor(client, "document.body.innerText.includes('REJECTED') && document.body.innerText.includes('Reference missing in synthetic receiver history')");
+      const saved = await pool.query("select status, review_reason from payment_proofs where id = $1", [proofId]);
+      if (saved.rows[0]?.status !== "REJECTED" || saved.rows[0]?.review_reason !== "Reference missing in synthetic receiver history") throw new Error("The GCash proof rejection did not persist.");
+      const posting = await pool.query("select count(*)::int as count from payments where external_reference = $1", [reference]);
+      if (posting.rows[0]?.count !== 0) throw new Error("The proof review unexpectedly posted a payment.");
+      expectDom(await client.evaluate("document.documentElement.scrollWidth <= window.innerWidth"), "GCash review workspace has horizontal overflow.");
+      await click(client, "Sign out");
+      await waitFor(client, "document.querySelector('#username') !== null");
+      await signIn(client, viewer.username, viewer.password);
+      await waitFor(client, "document.body.innerText.includes('Authenticated BCIS workspace')");
+      expectDom(await client.evaluate("![...document.querySelectorAll('nav[aria-label=\"Main navigation\"] button')].some((button) => button.textContent?.trim() === 'GCash proofs')"), "Viewer saw GCash proof review navigation.");
+      console.info(JSON.stringify({ gcashReviewImage: true, rejectionPersisted: true, noPaymentPosted: true, viewerNavigationHidden: true, noHorizontalOverflow: true, reference }));
+      return;
+    }
+
+    if (process.argv.includes("--search-only")) {
+      const fixture = await pool.query("select s.account_number, i.invoice_number, r.receipt_number from payments p join receipts r on r.payment_id = p.id join subscribers s on s.id = p.subscriber_id join payment_allocations a on a.payment_id = p.id join invoices i on i.id = a.invoice_id where p.method = 'CASH' order by p.paid_at desc, p.id desc limit 1");
+      const accountNumber = fixture.rows[0]?.account_number as string | undefined;
+      const invoiceNumber = fixture.rows[0]?.invoice_number as string | undefined;
+      const receiptNumber = fixture.rows[0]?.receipt_number as string | undefined;
+      if (!accountNumber || !invoiceNumber || !receiptNumber) throw new Error("A synthetic Cash receipt fixture is missing from bcis_test.");
+      const expected = process.argv.find((argument) => argument.startsWith("--expected-search-receipt="))?.split("=")[1];
+      if (expected && expected !== receiptNumber) throw new Error("The Cash search fixture changed across restart.");
+      for (const [term, destination] of [[accountNumber, "Add contact"], [invoiceNumber, "Invoice detail"], [receiptNumber, "System-generated receipt"]] as const) {
+        await clickAria(client, "Search BCIS records");
+        await waitFor(client, "document.querySelector('#workspace-search-panel') !== null");
+        await fill(client, 'input[aria-label="Search account, name, contact, address, invoice, payment or receipt"]', term);
+        await client.evaluate("document.querySelector('#workspace-search-panel form')?.requestSubmit(); true");
+        await waitFor(client, `Boolean([...document.querySelectorAll('[aria-label="Search results"] button')].find((item) => item.textContent?.includes(${JSON.stringify(term)})))`);
+        await client.evaluate(`(() => { const result = [...document.querySelectorAll('[aria-label="Search results"] button')].find((item) => item.textContent?.includes(${JSON.stringify(term)})); if (!result) throw new Error('Search result missing'); result.click(); return true; })()`);
+        await waitFor(client, `document.body.innerText.includes(${JSON.stringify(term)}) && document.body.innerText.includes(${JSON.stringify(destination)})`);
+        expectDom(await client.evaluate("document.documentElement.scrollWidth <= window.innerWidth"), "Search destination has horizontal overflow.");
+        await click(client, "Dashboard");
+        await waitFor(client, "document.body.innerText.includes('Authenticated BCIS workspace')");
+      }
+      expectDom(await client.evaluate("document.body.innerText.includes('GCash-reference lookup is unavailable pending policy approval.') === false"), "Closed search overlay remained visible.");
+      console.info(JSON.stringify({ accountSearch: true, invoiceSearch: true, receiptSearch: true, receiptNumber, noHorizontalOverflow: true }));
+      return;
+    }
+
+    if (process.argv.includes("--admin-verify-only")) {
+      const expected = process.argv.find((argument) => argument.startsWith("--expected-admin-user="))?.split("=")[1];
+      if (!expected || !/^a_gate3_admin_[a-f0-9]{32}$/.test(expected)) throw new Error("A synthetic administration username is required for restart verification.");
+      await click(client, "User accounts");
+      await waitFor(client, `Boolean([...document.querySelectorAll('tr')].find((item) => item.textContent?.includes(${JSON.stringify(expected)}) && item.textContent?.includes('TECHNICIAN') && item.textContent?.includes('Inactive')))`);
+      const saved = await pool.query("select count(*)::int as count from audit_logs a join users u on u.id::text = a.entity_id where u.username = $1 and a.action in ('user.create','user.roles.replace','user.deactivate')", [expected]);
+      if (saved.rows[0]?.count !== 3) throw new Error("Synthetic administration audit history did not persist across restart.");
+      expectDom(await client.evaluate("document.documentElement.scrollWidth <= window.innerWidth"), "Administration workspace has horizontal overflow after restart.");
+      console.info(JSON.stringify({ adminRestartPersistence: true, username: expected, auditEvents: 3, noHorizontalOverflow: true }));
+      return;
+    }
+
+    if (process.argv.includes("--admin-only")) {
+      const username = `a_gate3_admin_${randomUUID().replaceAll("-", "")}`;
+      const displayName = `AAA Gate 3 ${username.slice(-8)}`;
+      const password = randomBytes(24).toString("base64url");
+      await click(client, "User accounts");
+      await waitFor(client, "document.body.innerText.includes('New user') && document.querySelectorAll('form input').length >= 3");
+      await fillFormInput(client, 0, displayName);
+      await fillFormInput(client, 1, username);
+      await fillFormInput(client, 2, password);
+      await chooseValue(client, "form select", "VIEWER");
+      await click(client, "Create user");
+      await waitFor(client, `document.body.innerText.includes(${JSON.stringify(username)})`);
+      await client.evaluate(`(() => { const row = [...document.querySelectorAll('tr')].find((item) => item.textContent?.includes(${JSON.stringify(username)})); const button = [...(row?.querySelectorAll('button') ?? [])].find((item) => item.textContent?.trim() === 'Edit roles'); if (!button) throw new Error('Synthetic user role action missing'); button.click(); return true; })()`);
+      await waitFor(client, "document.body.innerText.includes('Confirm user roles?')");
+      await client.evaluate("(() => { const labels = [...document.querySelectorAll('[role=dialog] label')]; for (const [name, desired] of [['VIEWER', false], ['TECHNICIAN', true]]) { const label = labels.find((item) => item.textContent?.toUpperCase().includes(name)); const input = label?.querySelector('input'); if (!(input instanceof HTMLInputElement)) throw new Error('Role checkbox missing: ' + name); if (input.checked !== desired) input.click(); } return true; })()");
+      await click(client, "Save roles");
+      await waitFor(client, `Boolean([...document.querySelectorAll('tr')].find((item) => item.textContent?.includes(${JSON.stringify(username)}) && item.textContent?.includes('TECHNICIAN')))`);
+      await client.evaluate(`(() => { const row = [...document.querySelectorAll('tr')].find((item) => item.textContent?.includes(${JSON.stringify(username)})); const button = [...(row?.querySelectorAll('button') ?? [])].find((item) => item.textContent?.trim() === 'Deactivate'); if (!button) throw new Error('Synthetic user deactivate action missing'); button.click(); return true; })()`);
+      await waitFor(client, "document.body.innerText.includes('Confirm deactivation?')");
+      await click(client, "Deactivate user");
+      await waitFor(client, `Boolean([...document.querySelectorAll('tr')].find((item) => item.textContent?.includes(${JSON.stringify(username)}) && item.textContent?.includes('Inactive')))`);
+      await click(client, "Roles and permissions");
+      await waitFor(client, "document.body.innerText.includes('Changes are enforced by the API')");
+      await client.evaluate("(() => { const card = [...document.querySelectorAll('h3')].find((item) => item.textContent?.trim() === 'Technician')?.parentElement; const label = [...(card?.querySelectorAll('label') ?? [])].find((item) => item.textContent?.trim() === 'report.view'); const input = label?.querySelector('input'); if (!(input instanceof HTMLInputElement)) throw new Error('Technician report permission missing'); input.click(); return true; })()");
+      await waitFor(client, "document.body.innerText.includes('Confirm role permission change?')");
+      await click(client, "Cancel");
+      expectDom(await client.evaluate("!document.body.innerText.includes('Confirm role permission change?')"), "Cancelled permission dialog remained open.");
+      const saved = await pool.query("select u.id, u.is_active, array_agg(distinct r.code order by r.code) as roles, count(distinct a.id)::int as audit_count from users u join user_roles ur on ur.user_id = u.id join roles r on r.id = ur.role_id left join audit_logs a on a.entity_id = u.id::text and a.action in ('user.create','user.roles.replace','user.deactivate') where u.username = $1 group by u.id", [username]);
+      if (saved.rows[0]?.is_active !== false || saved.rows[0]?.roles?.join(",") !== "TECHNICIAN" || saved.rows[0]?.audit_count < 3) throw new Error(`Synthetic administration change did not persist with audit evidence: ${JSON.stringify(saved.rows[0])}`);
+      expectDom(await client.evaluate("document.documentElement.scrollWidth <= window.innerWidth"), "Administration workspace has horizontal overflow.");
+      console.info(JSON.stringify({ adminCreateRolesDeactivate: true, permissionConfirmationCancel: true, username, noHorizontalOverflow: true }));
+      return;
+    }
+
+    if (process.argv.includes("--audit-report-only")) {
+      const fixture = await pool.query("select entity_id, occurred_at::date::text as event_date from audit_logs where action = 'payment.reverse' order by occurred_at desc, id desc limit 1");
+      const entityId = fixture.rows[0]?.entity_id as string | undefined;
+      const eventDate = fixture.rows[0]?.event_date as string | undefined;
+      if (!entityId || !eventDate) throw new Error("A synthetic payment reversal audit fixture is missing from bcis_test.");
+      const expected = process.argv.find((argument) => argument.startsWith("--expected-audit-entity="))?.split("=")[1];
+      if (expected && expected !== entityId) throw new Error("Audit fixture changed across restart.");
+      const checkAudit = async () => {
+        await click(client!, "Reports");
+        await waitFor(client!, "[...document.querySelectorAll('button')].some((item) => item.textContent?.trim() === 'User and audit activity')");
+        await click(client!, "User and audit activity");
+        await waitFor(client!, "document.querySelectorAll('form input[type=\"date\"]').length === 2");
+        await fillReportDate(client!, 0, eventDate);
+        await fillReportDate(client!, 1, eventDate);
+        await click(client!, "Preview");
+        await waitFor(client!, `document.body.innerText.includes(${JSON.stringify(entityId)}) && document.body.innerText.includes('payment.reverse') && document.body.innerText.includes('User/security events')`);
+        expectDom(await client!.evaluate("[...document.querySelectorAll('button')].some((item) => item.textContent?.trim() === 'Save XLSX')"), "Authorized audit export control is missing.");
+        expectDom(await client!.evaluate("document.documentElement.scrollWidth <= window.innerWidth"), "Audit report workspace has horizontal overflow.");
+      };
+      await checkAudit();
+      await click(client, "Sign out");
+      await waitFor(client, "document.querySelector('#username') !== null");
+      const auditor = await createActor("ACCOUNTING_AUDITOR");
+      await signIn(client, auditor.username, auditor.password);
+      await waitFor(client, "document.body.innerText.includes('Authenticated BCIS workspace')");
+      await checkAudit();
+      await click(client, "Sign out");
+      await waitFor(client, "document.querySelector('#username') !== null");
+      await signIn(client, viewer.username, viewer.password);
+      await waitFor(client, "document.body.innerText.includes('Authenticated BCIS workspace')");
+      await click(client, "Reports");
+      await waitFor(client, "document.body.innerText.includes('Report catalog')");
+      expectDom(await client.evaluate("![...document.querySelectorAll('button')].some((item) => item.textContent?.trim() === 'User and audit activity')"), "Viewer was shown the audit report.");
+      console.info(JSON.stringify({ auditReportOwner: true, auditReportAuditor: true, viewerCatalogHidden: true, entityId, eventDate, noHorizontalOverflow: true }));
+      return;
+    }
+
+    if (process.argv.includes("--billed-revenue-report-only")) {
+      const fixture = await pool.query("select plan_code_snapshot as plan_code, invoice_date::text as invoice_date from invoices where status <> 'VOID' order by finalized_at desc, id desc limit 1");
+      const planCode = fixture.rows[0]?.plan_code as string | undefined;
+      const invoiceDate = fixture.rows[0]?.invoice_date as string | undefined;
+      if (!planCode || !invoiceDate) throw new Error("A synthetic finalized invoice fixture is missing from bcis_test.");
+      const expected = process.argv.find((argument) => argument.startsWith("--expected-billed-plan="))?.split("=")[1];
+      if (expected && expected !== planCode) throw new Error("Billed revenue fixture changed across restart.");
+      const checkBilledRevenue = async (canExport: boolean) => {
+        await click(client!, "Reports");
+        await waitFor(client!, "[...document.querySelectorAll('button')].some((item) => item.textContent?.trim() === 'Billed revenue by plan, service and current area')");
+        await click(client!, "Billed revenue by plan, service and current area");
+        await waitFor(client!, "document.querySelectorAll('form input[type=\"date\"]').length === 2");
+        await fillReportDate(client!, 0, invoiceDate);
+        await fillReportDate(client!, 1, invoiceDate);
+        await click(client!, "Preview");
+        await waitFor(client!, `document.body.innerText.includes(${JSON.stringify(planCode)}) && document.body.innerText.includes('Current subscriber area') && document.body.innerText.includes('Billed')`);
+        expectDom(await client!.evaluate("[...document.querySelectorAll('button')].some((item) => item.textContent?.trim() === 'Save XLSX')") === canExport, "Billed revenue export control did not match the signed-in role.");
+        expectDom(await client!.evaluate("document.documentElement.scrollWidth <= window.innerWidth"), "Billed revenue workspace has horizontal overflow.");
+      };
+      await checkBilledRevenue(true);
+      await click(client, "Sign out");
+      await waitFor(client, "document.querySelector('#username') !== null");
+      await signIn(client, viewer.username, viewer.password);
+      await waitFor(client, "document.body.innerText.includes('Authenticated BCIS workspace')");
+      await checkBilledRevenue(false);
+      console.info(JSON.stringify({ billedRevenueOwner: true, billedRevenueViewer: true, planCode, invoiceDate, noHorizontalOverflow: true }));
+      return;
+    }
+
+    if (process.argv.includes("--reversals-report-only")) {
+      const fixture = await pool.query("select p.payment_number, pr.reversed_at::date::text as reversal_date from payment_reversals pr join payments p on p.id = pr.payment_id join receipts r on r.payment_id = p.id where p.method = 'CASH' and r.voided_at is not null order by pr.reversed_at desc, pr.id desc limit 1");
+      const paymentNumber = fixture.rows[0]?.payment_number as string | undefined;
+      const reversalDate = fixture.rows[0]?.reversal_date as string | undefined;
+      if (!paymentNumber || !reversalDate) throw new Error("A synthetic reversed Cash payment fixture is missing from bcis_test.");
+      const expected = process.argv.find((argument) => argument.startsWith("--expected-reversal-payment="))?.split("=")[1];
+      if (expected && expected !== paymentNumber) throw new Error("Cash reversal fixture changed across restart.");
+      const checkReversals = async (canExport: boolean) => {
+        await click(client!, "Reports");
+        await waitFor(client!, "[...document.querySelectorAll('button')].some((item) => item.textContent?.trim() === 'Payment reversals and voided receipts')");
+        await click(client!, "Payment reversals and voided receipts");
+        await waitFor(client!, "document.body.innerText.includes('Cash and GCash reversals are grouped by reversal date') && document.querySelectorAll('form input[type=\"date\"]').length === 2");
+        await fillReportDate(client!, 0, reversalDate);
+        await fillReportDate(client!, 1, reversalDate);
+        await click(client!, "Preview");
+        await waitFor(client!, `document.body.innerText.includes(${JSON.stringify(paymentNumber)}) && document.body.innerText.includes('VOIDED') && document.body.innerText.includes('Compensating debits')`);
+        expectDom(await client!.evaluate("[...document.querySelectorAll('button')].some((item) => item.textContent?.trim() === 'Save XLSX')") === canExport, "Reversal report export control did not match the signed-in role.");
+        expectDom(await client!.evaluate("document.documentElement.scrollWidth <= window.innerWidth"), "Reversal report workspace has horizontal overflow.");
+      };
+      await checkReversals(true);
+      await click(client, "Sign out");
+      await waitFor(client, "document.querySelector('#username') !== null");
+      await signIn(client, viewer.username, viewer.password);
+      await waitFor(client, "document.body.innerText.includes('Authenticated BCIS workspace')");
+      await checkReversals(false);
+      console.info(JSON.stringify({ reversalsReportOwner: true, reversalsReportViewer: true, paymentNumber, reversalDate, noHorizontalOverflow: true }));
+      return;
+    }
 
     if (process.argv.includes("--performance-report-only")) {
       const fixture = await pool.query("select b.batch_number, b.collection_date::text as batch_date, c.display_name as collector from collection_batches b join collectors c on c.id = b.collector_id join collector_remittances r on r.batch_id = b.id where b.difference_centavos <> 0 order by r.remitted_at desc, b.id desc limit 1");
@@ -300,7 +689,7 @@ async function main() {
       return;
     }
 
-    if (process.argv.includes("--invoices-only") || process.argv.includes("--soa-only") || process.argv.includes("--payments-only") || process.argv.includes("--ledger-only") || process.argv.includes("--ar-only") || process.argv.includes("--batches-only") || process.argv.includes("--assignments-only")) {
+    if (process.argv.includes("--invoices-only") || process.argv.includes("--soa-only") || process.argv.includes("--payments-only") || process.argv.includes("--advance-only") || process.argv.includes("--ledger-only") || process.argv.includes("--ar-only") || process.argv.includes("--batches-only") || process.argv.includes("--assignments-only")) {
       const api = "http://127.0.0.1:4110/api/v1";
       const ownerLogin = await apiFetch(`${api}/auth/login`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(owner) });
       if (ownerLogin.status !== 200) throw new Error("Synthetic Owner API login failed.");
@@ -325,6 +714,45 @@ async function main() {
       const invoiceList = await apiFetch(`${api}/invoices?subscriberId=${subscriberId}&pageSize=1`, { headers });
       const invoice = ((await invoiceList.json()) as { data: { items: Array<{ invoiceNumber: string; totalCentavos: string }> } }).data.items[0];
       if (invoiceList.status !== 200 || !invoice) throw new Error("Synthetic invoice was not found.");
+      if (process.argv.includes("--advance-only")) {
+        const amount = BigInt(invoice.totalCentavos) + 100n;
+        const pesos = `${amount / 100n}.${(amount % 100n).toString().padStart(2, "0")}`;
+        const accountNumber = profileData.data.subscriber.accountNumber;
+        await click(client, "Receive payment");
+        await waitFor(client, "document.body.innerText.includes('Receive cash payment')");
+        await fill(client, "input[placeholder='Search subscriber account or name']", accountNumber);
+        await click(client, "Search");
+        await waitFor(client, `Boolean([...document.querySelectorAll('button')].find((button) => button.textContent?.includes(${JSON.stringify(accountNumber)})))`);
+        await client.evaluate(`(() => { const button = [...document.querySelectorAll('button')].find((item) => item.textContent?.includes(${JSON.stringify(accountNumber)})); if (!button) throw new Error('Synthetic subscriber missing'); button.click(); return true; })()`);
+        await fill(client, "input[placeholder='Amount in PHP']", pesos);
+        await click(client, "Preview allocation");
+        await waitFor(client, "document.body.innerText.includes('Subscriber credit after payment') && document.body.innerText.includes('Confirm and issue receipt')");
+        await click(client, "Confirm and issue receipt");
+        await waitFor(client, "document.body.innerText.includes('BCIS OFFICIAL RECEIPT') && document.body.innerText.includes('Subscriber credit')");
+        const paymentRow = await pool.query("select p.id, p.payment_number, r.receipt_number from payments p join receipts r on r.payment_id = p.id where p.subscriber_id = $1 order by p.paid_at desc limit 1", [subscriberId]);
+        const paymentId = paymentRow.rows[0]?.id as string | undefined;
+        const paymentNumber = paymentRow.rows[0]?.payment_number as string | undefined;
+        const receiptNumber = paymentRow.rows[0]?.receipt_number as string | undefined;
+        if (!paymentId || !paymentNumber || !receiptNumber) throw new Error("Electron advance payment did not persist.");
+        const futurePeriod = `${periodKey.slice(0, 4)}-02`;
+        const futureBill = await apiFetch(`${api}/billing/finalize`, { method: "POST", headers, body: JSON.stringify({ periodKey: futurePeriod, commandKey: randomUUID() }) });
+        if (futureBill.status !== 200) throw new Error(`Synthetic future billing returned ${futureBill.status}.`);
+        const futureInvoice = await pool.query("select invoice_number, paid_centavos, status from invoices where subscriber_id = $1 and billing_cycle_id = (select id from billing_cycles where period_key = $2)", [subscriberId, futurePeriod]);
+        const futureInvoiceNumber = futureInvoice.rows[0]?.invoice_number as string | undefined;
+        if (!futureInvoiceNumber || futureInvoice.rows[0]?.paid_centavos !== "100" || futureInvoice.rows[0]?.status !== "PARTIALLY_PAID") throw new Error("Future invoice did not consume exactly 100 centavos of credit.");
+        await click(client, "Payment history");
+        await waitFor(client, `document.body.innerText.includes(${JSON.stringify(paymentNumber)})`);
+        await clickAria(client, `View payment ${paymentNumber}`);
+        await waitFor(client, `document.body.innerText.includes(${JSON.stringify(receiptNumber)}) && document.body.innerText.includes('Subscriber credit at posting')`);
+        expectDom(await client.evaluate(`!document.body.innerText.includes(${JSON.stringify(futureInvoiceNumber)})`), "Original receipt incorrectly displayed a later credit allocation.");
+        await click(client, "Invoices");
+        await fill(client, "input[aria-label='Search invoice number']", futureInvoiceNumber);
+        await click(client, "Search");
+        await waitFor(client, `document.body.innerText.includes(${JSON.stringify(futureInvoiceNumber)}) && document.body.innerText.includes('PARTIALLY_PAID')`);
+        expectDom(await client.evaluate("document.documentElement.scrollWidth <= window.innerWidth"), "Advance workflow has horizontal overflow.");
+        console.info(JSON.stringify({ advancePreviewReceiptFutureInvoice: true, immutableReceiptAfterCreditUse: true, paymentNumber, futureInvoiceNumber, noHorizontalOverflow: true }));
+        return;
+      }
       if (process.argv.includes("--assignments-only")) {
         const setupResponse = await apiFetch(`${api}/collection-setup`, { headers });
         if (setupResponse.status !== 200) throw new Error("Synthetic collection setup could not be read.");
@@ -702,11 +1130,11 @@ class CdpClient {
       if (message.error) waiter.reject(new Error(message.error.message)); else waiter.resolve(message.result);
     });
   }
-  static async connect(port: number) {
+  static async connect(port: number, targetUrlPrefix = "http://localhost:5173") {
     const response = await fetch(`http://127.0.0.1:${port}/json/list`);
     const targets = await response.json() as Array<{ type: string; url: string; webSocketDebuggerUrl: string }>;
-    const target = targets.find((item) => item.type === "page" && item.url.startsWith("http://localhost:5173"));
-    if (!target) throw new Error("The Electron development renderer is not running on 5173.");
+    const target = targets.find((item) => item.type === "page" && item.url.startsWith(targetUrlPrefix));
+    if (!target) throw new Error(`The Electron renderer with ${targetUrlPrefix} URL is not running.`);
     const socket = new WebSocket(target.webSocketDebuggerUrl);
     await new Promise<void>((resolve, reject) => { socket.addEventListener("open", () => resolve(), { once: true }); socket.addEventListener("error", () => reject(new Error("CDP connection failed.")), { once: true }); });
     return new CdpClient(socket);
@@ -718,6 +1146,12 @@ class CdpClient {
     const response = await result as { result?: { value?: unknown }; exceptionDetails?: { text: string } };
     if (response.exceptionDetails) throw new Error(response.exceptionDetails.text);
     return response.result?.value;
+  }
+  async command(method: string, params: Record<string, unknown> = {}) {
+    const id = this.nextId++;
+    const result = new Promise<unknown>((resolve, reject) => this.pending.set(id, { resolve, reject }));
+    this.socket.send(JSON.stringify({ id, method, params }));
+    return result;
   }
   close() { this.socket.close(); }
 }
@@ -745,6 +1179,11 @@ async function waitFor(client: CdpClient, condition: string, timeoutMs = 15000) 
 
 async function fill(client: CdpClient, selector: string, value: string) {
   await client.evaluate(`(() => { const input = document.querySelector(${JSON.stringify(selector)}); if (!(input instanceof HTMLInputElement)) throw new Error('Input missing'); const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set; setter.call(input, ${JSON.stringify(value)}); input.dispatchEvent(new Event('input', { bubbles: true })); input.dispatchEvent(new Event('change', { bubbles: true })); return true; })()`);
+}
+
+async function attachSyntheticPng(client: CdpClient) {
+  const base64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRZkAAAAASUVORK5CYII=";
+  await client.evaluate(`(() => { const input = document.querySelector('input[aria-label="GCash proof image"]'); if (!(input instanceof HTMLInputElement)) throw new Error('GCash file input missing'); const bytes = Uint8Array.from(atob(${JSON.stringify(base64)}), (character) => character.charCodeAt(0)); const transfer = new DataTransfer(); transfer.items.add(new File([bytes], 'proof.png', { type: 'image/png' })); input.files = transfer.files; input.dispatchEvent(new Event('change', { bubbles: true })); return true; })()`);
 }
 
 async function chooseValue(client: CdpClient, selector: string, value: string) {

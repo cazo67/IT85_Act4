@@ -53,6 +53,13 @@ export function registerCollectionRoutes(app: FastifyInstance, auth: AuthService
     return { data: await service.remit(params.id, body, actor(session.id, session.user.id, request.id)) };
   });
 
+  app.post("/api/v1/collection-batches/:id/remittance-correction", async (request) => {
+    const session = await authorizeRequest(auth, request, "collection.reconcile");
+    const params = z.object({ id }).parse(request.params);
+    const body = parseBody(z.object({ correctedCashCentavos: centavos, reason: z.string().trim().min(10).max(500), cashCountConfirmed: z.literal(true), version: z.number().int().positive() }).strict(), request.body);
+    return { data: await service.correctRemittance(params.id, body, actor(session.id, session.user.id, request.id)) };
+  });
+
   app.post("/api/v1/collection-batches/:id/reconcile", async (request, reply) => {
     const session = await authorizeRequest(auth, request, "collection.reconcile");
     const params = z.object({ id }).parse(request.params);

@@ -1,7 +1,6 @@
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 
-import { AppError } from "../../app/app-error.js";
 import type { AuthService } from "../auth/auth-service.js";
 import { authorizeRequest, parseBody } from "../auth/auth-routes.js";
 import type { SecurityActor } from "../security-admin/security-admin-service.js";
@@ -53,10 +52,10 @@ export function registerBillingRoutes(app: FastifyInstance, auth: AuthService, b
   });
 
   app.post("/api/v1/invoices/:id/void", async (request) => {
-    await authorizeRequest(auth, request, "billing.adjust");
-    z.object({ id }).parse(request.params);
-    parseBody(z.object({ reason: z.string().trim().min(10).max(500) }), request.body);
-    throw new AppError(409, "POLICY_NOT_APPROVED", "Invoice voiding is disabled until its approval and credit policy is confirmed.");
+    const session = await authorizeRequest(auth, request, "billing.adjust");
+    const params = z.object({ id }).parse(request.params);
+    const body = parseBody(z.object({ reason: z.string().trim().min(10).max(500) }), request.body);
+    return { data: await billing.voidInvoice(params.id, body.reason, actor(session.id, session.user.id, request.id)) };
   });
 }
 

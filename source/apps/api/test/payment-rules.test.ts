@@ -20,11 +20,17 @@ describe("payment allocation rules", () => {
   });
 
   it("surfaces overpayment instead of silently discarding it", () => {
-    expect(allocateOldestFirst(30_000n, invoices).unallocatedCentavos).toBe(5_000n);
+    const result = allocateOldestFirst(30_000n, invoices);
+    expect(result.unallocatedCentavos).toBe(5_000n);
+    expect(result.allocations.reduce((sum, item) => sum + item.amountCentavos, 0n) + result.unallocatedCentavos).toBe(30_000n);
   });
 
   it("normalizes external references for future duplicate protection", () => {
     expect(normalizeExternalReference(" gcash-123 456 ")).toBe("GCASH123456");
+    expect(normalizeExternalReference("GCASH123456")).toBe("GCASH123456");
+    expect(() => normalizeExternalReference("gcash/123456")).toThrowError(/GCash reference/);
+    expect(() => normalizeExternalReference("12345")).toThrowError(/GCash reference/);
+    expect(() => normalizeExternalReference("A".repeat(41))).toThrowError(/GCash reference/);
   });
 
   it("distinguishes open, partial, and paid invoice settlement", () => {

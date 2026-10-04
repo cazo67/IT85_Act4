@@ -2,17 +2,22 @@ import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 
 import { EmptyState, ErrorState, LoadingState } from "@/components/async-state";
+import { ConfirmationDialog } from "@/components/confirmation-dialog";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { getInvoice, listInvoices, type InvoiceDetail } from "@/lib/api-client";
+import { getInvoice, listInvoices, voidInvoice, type InvoiceDetail } from "@/lib/api-client";
 import { queryKeys } from "@/lib/query-keys";
 
-export function InvoicesPanel({ token }: { token: string }) {
+export function InvoicesPanel({ token, openInvoiceId, canVoid }: { token: string; openInvoiceId?: string | undefined; canVoid: boolean }) {
   const [periodKey, setPeriodKey] = useState("");
   const [searchInput, setSearchInput] = useState("");
   const [invoiceNumber, setInvoiceNumber] = useState("");
   const [page, setPage] = useState(1);
-  const [selectedId, setSelectedId] = useState("");
+  const [selectedId, setSelectedId] = useState(openInvoiceId ?? "");
+  const [voidReason, setVoidReason] = useState("");
+  const [voidConfirming, setVoidConfirming] = useState(false);
+  const [voidBusy, setVoidBusy] = useState(false);
+  const [voidError, setVoidError] = useState("");
   const invoices = useQuery({
     queryKey: queryKeys.billing.invoices(periodKey, invoiceNumber, page),
     queryFn: () => listInvoices(token, periodKey, page, invoiceNumber),
@@ -31,6 +36,14 @@ export function InvoicesPanel({ token }: { token: string }) {
     setInvoiceNumber(searchInput.trim());
   }
 
+  async function confirmVoid() {
+    if (!selectedId) return;
+    setVoidBusy(true);
+    try { await voidInvoice(token, selectedId, voidReason.trim()); setVoidConfirming(false); setVoidReason(""); setVoidError(""); await detail.refetch(); }
+    catch (caught) { setVoidError(message(caught)); setVoidConfirming(false); }
+    finally { setVoidBusy(false); }
+  }
+
   if (selectedId) return <section className="rounded-xl border bg-surface p-6">
     <div className="flex flex-wrap items-center justify-between gap-3">
       <div><h2 className="text-lg font-semibold">Invoice detail</h2><p className="text-sm text-muted-foreground">Finalized charge and payment state, read-only</p></div>
@@ -38,7 +51,7 @@ export function InvoicesPanel({ token }: { token: string }) {
     </div>
     {detail.isPending && <div className="mt-5"><LoadingState label="Loading invoice…" /></div>}
     {detail.isError && <div className="mt-5"><ErrorState message={message(detail.error)} onRetry={() => void detail.refetch()} /></div>}
-    {detail.data && <InvoiceDetailView data={detail.data} />}
+    {detail.data && <><InvoiceDetailView data={detail.data} />{canVoid && detail.data.invoice.status === "OPEN" && detail.data.invoice.paidCentavos === "0" && <div className="mt-5 rounded-lg border p-4"><label className="block text-sm">Void reason (10–500 characters)<Input className="mt-2" maxLength={500} value={voidReason} onChange={(event) => setVoidReason(event.target.value)} /></label><Button className="mt-3" disabled={voidReason.trim().length < 10 || voidBusy} onClick={() => setVoidConfirming(true)} variant="destructive">Void unpaid invoice</Button></div>}{voidError && <p className="mt-3 text-sm text-danger" role="alert">{voidError}</p>}<ConfirmationDialog open={voidConfirming} title="Void this unpaid invoice?" description="The invoice remains in history. A compensating ledger credit removes its receivable; an invoice with any payment or credit history is rejected." details={<><p>{detail.data.invoice.invoiceNumber}</p><p>Reason: {voidReason.trim()}</p></>} confirmLabel="Void invoice" destructive busy={voidBusy} onCancel={() => setVoidConfirming(false)} onConfirm={() => void confirmVoid()} /></>}
   </section>;
 
   return <section className="rounded-xl border bg-surface p-6">
@@ -86,7 +99,8 @@ function InvoiceDetailView({ data }: { data: InvoiceDetail }) {
     </div>
     <div className="overflow-x-auto rounded-lg border"><table className="w-full min-w-[620px] text-left text-sm"><thead className="bg-muted"><tr><th className="px-4 py-3">Charge</th><th>Quantity</th><th className="text-right">Unit</th><th className="pr-4 text-right">Total</th></tr></thead><tbody>{data.items.map((item) => <tr className="border-t" key={item.id}><td className="px-4 py-3">{item.description}</td><td>{item.quantity}</td><td className="text-right tabular-nums">{peso(item.unitAmountCentavos)}</td><td className="pr-4 text-right tabular-nums">{peso(item.totalCentavos)}</td></tr>)}</tbody></table></div>
     <div className="grid gap-3 sm:grid-cols-3"><Fact label="Billed" value={peso(invoice.totalCentavos)} /><Fact label="Paid" value={peso(invoice.paidCentavos)} /><Fact label="Outstanding" value={peso(invoice.outstandingCentavos)} /></div>
-    <p className="text-xs text-muted-foreground">Amounts and outstanding balance are calculated by the server. Corrections and voiding remain unavailable until policy approval.</p>
+    {data.voidRecord && <p className="text-sm">Voided {new Date(data.voidRecord.voidedAt).toLocaleString("en-PH")}. Reason: {data.voidRecord.reason}</p>}
+    <p className="text-xs text-muted-foreground">Amounts and outstanding balance are calculated by the server. A void retains the invoice and adds a compensating ledger credit.</p>
   </div>;
 }
 

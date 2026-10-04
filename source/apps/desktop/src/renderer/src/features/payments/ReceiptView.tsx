@@ -5,6 +5,7 @@ export function ReceiptView({ result, canPrint, onClose, closeLabel = "Close" }:
   const receipt = result.receipt;
   if (!receipt) return <p className="text-sm text-muted-foreground">No receipt is available for this payment.</p>;
   const snapshot = receipt.snapshot;
+  const originalAllocations = Array.isArray(snapshot.allocations) ? snapshot.allocations as Array<{ invoiceNumber: string; amountCentavos: string }> : [];
   const voided = Boolean(receipt.voidedAt) || result.payment.status === "REVERSED";
   return <section className="rounded-xl border bg-surface p-6">
     <div className="print-receipt mx-auto max-w-xl rounded-lg border bg-white p-8 text-black">
@@ -16,9 +17,11 @@ export function ReceiptView({ result, canPrint, onClose, closeLabel = "Close" }:
         <Row label="Subscriber" value={String(snapshot.subscriberName ?? "")} />
         <Row label="Payment" value={String(snapshot.paymentNumber ?? "")} />
         <Row label="Method" value={String(snapshot.method ?? "")} />
+        {Boolean(snapshot.externalReference) && <Row label={snapshot.method === "GCASH" ? "GCash reference" : "Payment reference"} value={String(snapshot.externalReference)} />}
+        {Boolean(snapshot.otherDescription) && <Row label="Payment description" value={String(snapshot.otherDescription)} />}
         <Row label="Amount received" value={peso(String(snapshot.amountCentavos ?? "0"))} />
       </div>
-      <div className="mt-5 border-t pt-4"><p className="text-sm font-medium">Applied invoices</p>{result.allocations.map((allocation) => <Row key={allocation.invoiceNumber} label={allocation.invoiceNumber} value={`${peso(allocation.amountCentavos)}${allocation.isReversed ? " (reversed)" : ""}`} />)}</div>
+      <div className="mt-5 border-t pt-4"><p className="text-sm font-medium">Applied invoices at posting</p>{originalAllocations.map((allocation) => <Row key={allocation.invoiceNumber} label={allocation.invoiceNumber} value={peso(allocation.amountCentavos)} />)}{BigInt(String(snapshot.advanceCreditCentavos ?? "0")) > 0n && <Row label="Subscriber credit at posting" value={peso(String(snapshot.advanceCreditCentavos))} />}</div>
       <p className="mt-6 text-center text-xs">System-generated receipt · {new Date(String(snapshot.issuedAt)).toLocaleString("en-PH")}</p>
       {voided && <p className="mt-2 text-center text-xs">Voided {new Date(receipt.voidedAt ?? result.payment.paidAt).toLocaleString("en-PH")}</p>}
     </div>

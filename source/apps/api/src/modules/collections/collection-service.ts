@@ -15,6 +15,7 @@ import {
   invoices,
   numberSequences,
   payments,
+  remittanceCorrections,
   serviceAccounts,
   subscriberAddresses,
   subscribers
@@ -80,6 +81,7 @@ export class CollectionService {
       const accounts = await transaction.select().from(collectionBatchAccounts).where(eq(collectionBatchAccounts.batchId, batchId)).orderBy(asc(collectionBatchAccounts.accountNumberSnapshot), asc(collectionBatchAccounts.serviceNumberSnapshot));
       const entries = await transaction.select().from(batchCollectionEntries).where(eq(batchCollectionEntries.batchId, batchId)).orderBy(asc(batchCollectionEntries.recordedAt));
       const remittance = await transaction.select().from(collectorRemittances).where(eq(collectorRemittances.batchId, batchId)).limit(1);
+      const correction = remittance[0] ? await transaction.select().from(remittanceCorrections).where(eq(remittanceCorrections.remittanceId, remittance[0].id)).limit(1) : [];
       const reconciliation = await transaction.select().from(batchReconciliations).where(eq(batchReconciliations.batchId, batchId)).limit(1);
       const expectedFromAccounts = accounts.reduce((sum, account) => sum + account.expectedCentavos, 0n);
       const collectedFromAccounts = accounts.reduce((sum, account) => sum + account.collectedCentavos, 0n);
@@ -91,7 +93,7 @@ export class CollectionService {
         uncollectedCentavos: (expectedFromAccounts - collectedFromAccounts).toString(),
         totalsMatch: expectedFromAccounts === batch.expectedCashCentavos && collectedFromAccounts === batch.collectedCashCentavos
       };
-      return { batch: serializeBatch(batch), summary, accounts: accounts.map(serializeAccount), entries: entries.map((entry) => ({ ...entry, amountCentavos: entry.amountCentavos.toString() })), remittance: remittance[0] ? serializeRemittance(remittance[0]) : null, reconciliation: reconciliation[0] ? serializeReconciliation(reconciliation[0]) : null };
+      return { batch: serializeBatch(batch), summary, accounts: accounts.map(serializeAccount), entries: entries.map((entry) => ({ ...entry, amountCentavos: entry.amountCentavos.toString() })), remittance: remittance[0] ? serializeRemittance(remittance[0]) : null, correction: correction[0] ? serializeCorrection(correction[0]) : null, reconciliation: reconciliation[0] ? serializeReconciliation(reconciliation[0]) : null };
     }, { isolationLevel: "repeatable read" });
   }
 
@@ -153,13 +155,34 @@ export class CollectionService {
     });
   }
 
+  async correctRemittance(batchId: string, input: { correctedCashCentavos: string; reason: string; cashCountConfirmed: true; version: number }, actor: SecurityActor) {
+    const corrected = BigInt(input.correctedCashCentavos);
+    if (input.cashCountConfirmed !== true) throw new AppError(400, "CASH_COUNT_NOT_CONFIRMED", "Confirm the corrected cash count before recording it.");
+    return this.db.transaction(async (transaction) => {
+      const [batch] = await transaction.select().from(collectionBatches).where(eq(collectionBatches.id, batchId)).for("update").limit(1);
+      if (!batch) throw new AppError(404, "COLLECTION_BATCH_NOT_FOUND", "The collection batch was not found.");
+      if (batch.status !== "REMITTED" || batch.version !== input.version) throw new AppError(409, "CONCURRENCY_CONFLICT", "Reload the remitted batch before correcting it.");
+      if (batch.differenceCentavos === 0n) throw new AppError(409, "BATCH_ALREADY_BALANCED", "This remittance is already balanced.");
+      if (corrected !== batch.collectedCashCentavos) throw new AppError(409, "REMITTANCE_MUST_MATCH", "The corrected cash amount must exactly match collected cash before reconciliation.");
+      const [remittance] = await transaction.select().from(collectorRemittances).where(eq(collectorRemittances.batchId, batchId)).limit(1);
+      if (!remittance) throw new AppError(409, "REMITTANCE_REQUIRED", "Record the original remittance first.");
+      const [prior] = await transaction.select({ id: remittanceCorrections.id }).from(remittanceCorrections).where(eq(remittanceCorrections.remittanceId, remittance.id)).limit(1);
+      if (prior) throw new AppError(409, "REMITTANCE_ALREADY_CORRECTED", "This remittance already has a correction.");
+      const [created] = await transaction.insert(remittanceCorrections).values({ remittanceId: remittance.id, correctedCashCentavos: corrected, reason: input.reason.trim(), correctedBy: actor.userId }).returning();
+      if (!created) throw new Error("The correction could not be recorded.");
+      await transaction.update(collectionBatches).set({ remittedCashCentavos: corrected, differenceCentavos: 0n, version: sql`${collectionBatches.version} + 1`, updatedAt: new Date() }).where(eq(collectionBatches.id, batchId));
+      await audit(transaction, actor, "collection_batch.remittance_correct", batchId, { originalRemittedCentavos: remittance.remittedCashCentavos.toString(), correctedCashCentavos: corrected.toString(), reason: input.reason.trim() });
+      return serializeCorrection(created);
+    });
+  }
+
   async reconcile(batchId: string, notes: string, version: number, actor: SecurityActor): Promise<void> {
     await this.db.transaction(async (transaction) => {
       const [batch] = await transaction.select().from(collectionBatches).where(eq(collectionBatches.id, batchId)).for("update").limit(1);
       if (!batch) throw new AppError(404, "COLLECTION_BATCH_NOT_FOUND", "The collection batch was not found.");
       validateBatchTransition(batch.status, "RECONCILED");
       if (batch.version !== version) throw new AppError(409, "CONCURRENCY_CONFLICT", "The batch changed. Reload it before reconciling.");
-      if (batch.differenceCentavos !== 0n) throw new AppError(409, "DIFFERENCE_APPROVAL_REQUIRED", "The shortage or overage remains visible but cannot be approved until the exception policy is defined.");
+      if (batch.differenceCentavos !== 0n) throw new AppError(409, "DIFFERENCE_APPROVAL_REQUIRED", "Correct the shortage or overage to an exact match before reconciliation.");
       const [remittance] = await transaction.select().from(collectorRemittances).where(eq(collectorRemittances.batchId, batchId)).limit(1);
       if (!remittance) throw new AppError(409, "REMITTANCE_REQUIRED", "Record the collector remittance before reconciliation.");
       await transaction.insert(batchReconciliations).values({ batchId, expectedCentavos: batch.expectedCashCentavos, collectedCashCentavos: batch.collectedCashCentavos, remittedCashCentavos: batch.remittedCashCentavos, nonCashCentavos: batch.nonCashCentavos, differenceCentavos: batch.differenceCentavos, notes: notes.trim(), reconciledBy: actor.userId });
@@ -175,4 +198,5 @@ async function audit(transaction: CollectionTransaction, actor: SecurityActor, a
 function serializeBatch(row: typeof collectionBatches.$inferSelect) { return { ...row, expectedCashCentavos: row.expectedCashCentavos.toString(), collectedCashCentavos: row.collectedCashCentavos.toString(), nonCashCentavos: row.nonCashCentavos.toString(), remittedCashCentavos: row.remittedCashCentavos.toString(), differenceCentavos: row.differenceCentavos.toString() }; }
 function serializeAccount(row: typeof collectionBatchAccounts.$inferSelect) { return { ...row, currentBillCentavosSnapshot: row.currentBillCentavosSnapshot?.toString() ?? null, arrearsCentavosSnapshot: row.arrearsCentavosSnapshot?.toString() ?? null, expectedCentavos: row.expectedCentavos.toString(), collectedCentavos: row.collectedCentavos.toString() }; }
 function serializeRemittance(row: typeof collectorRemittances.$inferSelect) { return { ...row, remittedCashCentavos: row.remittedCashCentavos.toString(), differenceCentavos: row.differenceCentavos.toString() }; }
+function serializeCorrection(row: typeof remittanceCorrections.$inferSelect) { return { ...row, correctedCashCentavos: row.correctedCashCentavos.toString() }; }
 function serializeReconciliation(row: typeof batchReconciliations.$inferSelect) { return { ...row, expectedCentavos: row.expectedCentavos.toString(), collectedCashCentavos: row.collectedCashCentavos.toString(), remittedCashCentavos: row.remittedCashCentavos.toString(), nonCashCentavos: row.nonCashCentavos.toString(), differenceCentavos: row.differenceCentavos.toString() }; }

@@ -20,7 +20,7 @@ export class BackupService {
   private operationRunning = false;
   private maintenance = false;
   private readonly root: string;
-  constructor(private readonly db: BcisDatabase, private readonly config: BackupConfiguration) { this.root = resolve(config.backupRoot); }
+  constructor(private readonly db: BcisDatabase, private readonly config: BackupConfiguration, private readonly beforeDump?: () => Promise<void>) { this.root = resolve(config.backupRoot); }
 
   isMaintenanceMode(): boolean { return this.maintenance; }
 
@@ -41,11 +41,21 @@ export class BackupService {
       await mkdir(this.root, { recursive: true });
       await mkdir(directory, { recursive: false });
       await this.db.insert(backupRuns).values({ id, backupDirectory: directory, databaseFile, manifestFile, createdBy: actor.userId });
-      const snapshot = await this.financialSnapshot();
-      await run(this.config.pgDumpPath, ["--format=custom", "--compress=6", "--no-owner", "--no-privileges", "--file", databaseFile], this.config.databaseUrl);
+      // Keep the exporting transaction open until pg_dump has imported its snapshot.
+      // Otherwise a concurrent payment can make the manifest disagree with the dump.
+      const snapshot = await this.db.transaction(async (transaction) => {
+        await transaction.execute(sql`set transaction read only`);
+        const result = await transaction.execute(sql`select pg_export_snapshot() as snapshot_id`);
+        const snapshotId = (result.rows[0] as { snapshot_id: string } | undefined)?.snapshot_id;
+        if (!snapshotId) throw new Error("PostgreSQL did not export a backup snapshot.");
+        const financialSnapshot = await this.financialSnapshot(transaction);
+        await this.beforeDump?.();
+        await run(this.config.pgDumpPath, ["--format=custom", "--compress=6", "--no-owner", "--no-privileges", "--snapshot", snapshotId, "--file", databaseFile], this.config.databaseUrl);
+        return financialSnapshot;
+      }, { isolationLevel: "repeatable read" });
       const file = await readFile(databaseFile);
       const sha256 = createHash("sha256").update(file).digest("hex");
-      const manifest = { formatVersion: 1, backupId: id, createdAt: new Date().toISOString(), databaseFile: "database.dump", databaseBytes: file.byteLength, databaseSha256: sha256, financialSnapshot: snapshot, attachments: { included: false, reason: "Attachment storage is not configured in the implemented modules." } };
+      const manifest = { formatVersion: 1, backupId: id, createdAt: new Date().toISOString(), databaseFile: "database.dump", databaseBytes: file.byteLength, databaseSha256: sha256, financialSnapshot: snapshot, attachments: { included: true, storage: "PostgreSQL payment_proofs.proof_data" } };
       await writeFile(manifestFile, `${JSON.stringify(manifest, null, 2)}\n`, { encoding: "utf8", flag: "wx" });
       const [updated] = await this.db.update(backupRuns).set({ status: "CREATED", sizeBytes: BigInt(file.byteLength), sha256, financialSnapshot: snapshot, completedAt: new Date() }).where(eq(backupRuns.id, id)).returning();
       await audit(this.db, actor, "backup.create", id, { sizeBytes: file.byteLength, sha256 });
@@ -100,12 +110,11 @@ export class BackupService {
     await run(this.config.pgRestorePath, ["--list", databaseFile], this.config.databaseUrl);
     return { databaseFile, sha256 };
   }
-  private async financialSnapshot() {
-    const [[invoice], [payment], [ledger]] = await Promise.all([
-      this.db.select({ count: sql<number>`count(*)::integer`, total: sum(invoices.totalCentavos), paid: sum(invoices.paidCentavos) }).from(invoices),
-      this.db.select({ count: sql<number>`count(*)::integer`, total: sum(payments.amountCentavos) }).from(payments),
-      this.db.select({ count: sql<number>`count(*)::integer`, debit: sum(ledgerEntries.debitCentavos), credit: sum(ledgerEntries.creditCentavos) }).from(ledgerEntries)
-    ]);
+  private async financialSnapshot(database: Pick<BcisDatabase, "select">) {
+    // These queries share one exported-snapshot connection and must be serialized.
+    const [invoice] = await database.select({ count: sql<number>`count(*)::integer`, total: sum(invoices.totalCentavos), paid: sum(invoices.paidCentavos) }).from(invoices);
+    const [payment] = await database.select({ count: sql<number>`count(*)::integer`, total: sum(payments.amountCentavos) }).from(payments);
+    const [ledger] = await database.select({ count: sql<number>`count(*)::integer`, debit: sum(ledgerEntries.debitCentavos), credit: sum(ledgerEntries.creditCentavos) }).from(ledgerEntries);
     return { invoiceCount: Number(invoice?.count ?? 0), invoiceTotalCentavos: money(invoice?.total), invoicePaidCentavos: money(invoice?.paid), paymentCount: Number(payment?.count ?? 0), paymentTotalCentavos: money(payment?.total), ledgerEntryCount: Number(ledger?.count ?? 0), ledgerDebitCentavos: money(ledger?.debit), ledgerCreditCentavos: money(ledger?.credit) };
   }
 }

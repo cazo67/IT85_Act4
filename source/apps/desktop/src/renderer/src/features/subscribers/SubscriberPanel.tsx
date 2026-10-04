@@ -16,12 +16,12 @@ import { queryKeys } from "@/lib/query-keys";
 import { SubscriberLedger } from "./SubscriberLedger";
 import { StatementOfAccount } from "./StatementOfAccount";
 
-export function SubscriberPanel({ token, canCreate, canEdit, canManageServices, canManageCollections, canViewReceivables, canViewReports, canExportReports }: { token: string; canCreate: boolean; canEdit: boolean; canManageServices: boolean; canManageCollections: boolean; canViewReceivables: boolean; canViewReports: boolean; canExportReports: boolean }) {
+export function SubscriberPanel({ token, openSubscriberId, canCreate, canEdit, canManageServices, canManageCollections, canViewReceivables, canViewReports, canExportReports }: { token: string; openSubscriberId?: string | undefined; canCreate: boolean; canEdit: boolean; canManageServices: boolean; canManageCollections: boolean; canViewReceivables: boolean; canViewReports: boolean; canExportReports: boolean }) {
   const [searchInput, setSearchInput] = useState("");
   const [search, setSearch] = useState("");
   const [page, setPage] = useState(1);
-  const [view, setView] = useState<"list" | "new" | "profile">("list");
-  const [selectedId, setSelectedId] = useState("");
+  const [view, setView] = useState<"list" | "new" | "profile">(openSubscriberId ? "profile" : "list");
+  const [selectedId, setSelectedId] = useState(openSubscriberId ?? "");
   const subscribers = useQuery({ queryKey: queryKeys.subscribers.list(search, page), queryFn: () => listSubscribers(token, search, page), enabled: view === "list" });
   const columns = useMemo<ColumnDef<SubscriberListItem>[]>(() => [
     { accessorKey: "accountNumber", header: "Account", cell: ({ row }) => <span className="font-medium">{row.original.accountNumber}</span> },

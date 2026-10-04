@@ -86,6 +86,19 @@ export const collectorRemittances = pgTable("collector_remittances", {
   check("collector_remittances_cash_chk", sql`${table.remittedCashCentavos} >= 0`)
 ]);
 
+export const remittanceCorrections = pgTable("remittance_corrections", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  remittanceId: uuid("remittance_id").notNull().references(() => collectorRemittances.id, { onDelete: "restrict" }),
+  correctedCashCentavos: bigint("corrected_cash_centavos", { mode: "bigint" }).notNull(),
+  reason: text("reason").notNull(),
+  correctedBy: uuid("corrected_by").references(() => users.id, { onDelete: "restrict" }),
+  correctedAt: timestamp("corrected_at", { withTimezone: true }).notNull().defaultNow()
+}, (table) => [
+  uniqueIndex("remittance_corrections_remittance_uidx").on(table.remittanceId),
+  check("remittance_corrections_amount_chk", sql`${table.correctedCashCentavos} >= 0`),
+  check("remittance_corrections_reason_chk", sql`length(trim(${table.reason})) between 10 and 500`)
+]);
+
 export const batchReconciliations = pgTable("batch_reconciliations", {
   id: uuid("id").defaultRandom().primaryKey(),
   batchId: uuid("batch_id").notNull().references(() => collectionBatches.id, { onDelete: "restrict" }),

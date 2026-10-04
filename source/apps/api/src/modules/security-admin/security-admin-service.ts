@@ -3,7 +3,7 @@ import { and, asc, count, eq, ilike, inArray, or, sql } from "drizzle-orm";
 
 import { AppError } from "../../app/app-error.js";
 import type { BcisDatabase } from "../../db/client.js";
-import { auditLogs, permissions, rolePermissions, roles, userRoles, users } from "../../db/schema/index.js";
+import { auditLogs, authSessions, permissions, rolePermissions, roles, userRoles, users } from "../../db/schema/index.js";
 import { hashPassword } from "../../security/password.js";
 import { normalizeUsername } from "../auth/auth-service.js";
 
@@ -68,6 +68,7 @@ export class SecurityAdminService {
     await this.db.transaction(async (transaction) => {
       const [updated] = await transaction.update(users).set({ isActive, version: sql`${users.version} + 1`, updatedAt: new Date() }).where(eq(users.id, userId)).returning({ id: users.id });
       if (!updated) throw new AppError(404, "USER_NOT_FOUND", "The user was not found.");
+      await transaction.update(authSessions).set({ revokedAt: new Date() }).where(and(eq(authSessions.userId, userId), sql`${authSessions.revokedAt} is null`));
       await transaction.insert(auditLogs).values({ actorUserId: actor.userId, actorSessionId: actor.sessionId, action: isActive ? "user.activate" : "user.deactivate", entityType: "user", entityId: userId, requestId: actor.requestId ?? null, afterValues: { isActive } });
     });
   }
@@ -79,10 +80,13 @@ export class SecurityAdminService {
     }
 
     await this.db.transaction(async (transaction) => {
+      const [target] = await transaction.select({ id: users.id }).from(users).where(eq(users.id, userId)).limit(1);
+      if (!target) throw new AppError(404, "USER_NOT_FOUND", "The user was not found.");
       const selected = await transaction.select({ id: roles.id }).from(roles).where(inArray(roles.code, roleCodes));
       if (selected.length !== new Set(roleCodes).size) throw new AppError(400, "INVALID_ROLE", "One or more roles are invalid.");
       await transaction.delete(userRoles).where(eq(userRoles.userId, userId));
       if (selected.length > 0) await transaction.insert(userRoles).values(selected.map((role) => ({ userId, roleId: role.id, assignedBy: actor.userId })));
+      await transaction.update(authSessions).set({ revokedAt: new Date() }).where(and(eq(authSessions.userId, userId), sql`${authSessions.revokedAt} is null`));
       await transaction.insert(auditLogs).values({ actorUserId: actor.userId, actorSessionId: actor.sessionId, action: "user.roles.replace", entityType: "user", entityId: userId, requestId: actor.requestId ?? null, beforeValues: { roles: currentRoles }, afterValues: { roles: roleCodes } });
     });
   }
@@ -97,8 +101,10 @@ export class SecurityAdminService {
     await this.db.transaction(async (transaction) => {
       const selected = await transaction.select({ id: permissions.id }).from(permissions).where(inArray(permissions.code, permissionCodes));
       if (selected.length !== new Set(permissionCodes).size) throw new AppError(400, "INVALID_PERMISSION", "One or more permissions are invalid.");
+      const affectedUsers = await transaction.select({ userId: userRoles.userId }).from(userRoles).where(eq(userRoles.roleId, roleId));
       await transaction.delete(rolePermissions).where(eq(rolePermissions.roleId, roleId));
       if (selected.length > 0) await transaction.insert(rolePermissions).values(selected.map((permission) => ({ roleId, permissionId: permission.id })));
+      if (affectedUsers.length > 0) await transaction.update(authSessions).set({ revokedAt: new Date() }).where(and(inArray(authSessions.userId, affectedUsers.map((row) => row.userId)), sql`${authSessions.revokedAt} is null`));
       await transaction.insert(auditLogs).values({ actorUserId: actor.userId, actorSessionId: actor.sessionId, action: "role.permissions.replace", entityType: "role", entityId: roleId, requestId: actor.requestId ?? null, afterValues: { permissions: permissionCodes } });
     });
   }

@@ -25,7 +25,7 @@ describe.skipIf(!testUri)("Gate 3 subscriber identity PostgreSQL integration", (
     if (target.hostname !== "127.0.0.1" || target.port !== "5433" || target.pathname !== "/bcis_test") throw new Error("The test target must be local bcis_test on port 5433.");
     pool = new Pool({ connectionString: testUri, max: 2 });
     const identity = await pool.query("select current_database() as name, (select count(*)::int from drizzle.__drizzle_migrations) as migrations");
-    if (identity.rows[0]?.name !== "bcis_test" || identity.rows[0]?.migrations !== 15) throw new Error("The isolated test database is not ready.");
+    if (identity.rows[0]?.name !== "bcis_test" || identity.rows[0]?.migrations !== 19) throw new Error("The isolated test database is not ready.");
     database = createDatabase(testUri);
     app = await buildApp({ allowedOrigins: [], authService: new AuthService(new PostgresAuthStore(database.db)), subscriberService: new SubscriberService(database.db) });
   });

@@ -1,4 +1,4 @@
-import { randomBytes, randomInt, randomUUID } from "node:crypto";
+import { randomBytes, randomUUID } from "node:crypto";
 
 import { eq } from "drizzle-orm";
 import ExcelJS from "exceljs";
@@ -34,8 +34,8 @@ describe.skipIf(!testUri)("Gate 1 PostgreSQL retry integration", () => {
     }
     assertions = new Pool({ connectionString: testUri, max: 2 });
     const target = await assertions.query("select current_database() as name, (select count(*)::int from drizzle.__drizzle_migrations) as migrations");
-    if (target.rows[0]?.name !== "bcis_test" || target.rows[0]?.migrations !== 15) {
-      throw new Error("The isolated test database must contain all 15 migrations.");
+    if (target.rows[0]?.name !== "bcis_test" || target.rows[0]?.migrations !== 19) {
+      throw new Error("The isolated test database must contain all 19 migrations.");
     }
     database = createDatabase(testUri);
     const auth = new AuthService(new PostgresAuthStore(database.db));
@@ -97,8 +97,10 @@ describe.skipIf(!testUri)("Gate 1 PostgreSQL retry integration", () => {
     const assignment = await request("POST", "/api/v1/collector-assignments", { collectorId: collector.id, routeId: route.id, serviceAccountId: serviceId, effectiveFrom: "2026-01-01" });
     expect(assignment.statusCode).toBe(200);
 
-    const year = 3000 + randomInt(6000);
-    const month = String(randomInt(1, 13)).padStart(2, "0");
+    const unused = await assertions.query("select candidate::int as year from generate_series(3000, 8999) candidate where not exists (select 1 from billing_cycles where left(period_key, 4) = candidate::text) order by candidate limit 1");
+    const year = unused.rows[0]?.year as number | undefined;
+    if (!year) throw new Error("No unused synthetic billing year is available in bcis_test.");
+    const month = "02";
     const periodKey = `${year}-${month}`;
     const previousPeriodKey = new Date(Date.UTC(year, Number(month) - 2, 1)).toISOString().slice(0, 7);
     for (const billedPeriod of [previousPeriodKey, periodKey]) {
@@ -314,7 +316,9 @@ describe.skipIf(!testUri)("Gate 1 PostgreSQL retry integration", () => {
     expect(sheet?.getRow(1).values).toContain("Exception / remittance state");
     const exportedBalanced = sheet?.getRows(2, sheet.rowCount - 1)?.find((row) => row.getCell(1).value === balancedRow?.batchNumber);
     expect(exportedBalanced?.getCell(9).value).toBe(5);
-    expect(exportedBalanced?.getCell(14).value).toBe("BALANCED");
+    const exceptionColumn = (sheet?.getRow(1).values as Array<unknown> | undefined)?.findIndex((value) => value === "Exception / remittance state");
+    expect(exceptionColumn).toBeGreaterThan(0);
+    expect(exportedBalanced?.getCell(exceptionColumn ?? -1).value).toBe("BALANCED");
     const reconciliation = await assertions.query("select (select coalesce(sum(total_centavos - paid_centavos), 0) from invoices where subscriber_id = $1) as receivable, (select coalesce(sum(debit_centavos - credit_centavos), 0) from ledger_entries where subscriber_id = $1) as ledger_net", [subscriberId]);
     expect(reconciliation.rows[0]?.ledger_net).toBe(reconciliation.rows[0]?.receivable);
     expect(BigInt(invoiceRows.rows[0]?.total_centavos as string) + BigInt(invoiceRows.rows[1]?.total_centavos as string) - 1500n).toBe(BigInt(reconciliation.rows[0]?.receivable as string));
