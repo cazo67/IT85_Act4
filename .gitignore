@@ -25,3 +25,7 @@ Thumbs.db
 .idea/
 .vscode/
 
+
+# demo recording outputs (synthetic run artifacts)
+/demo-output/
+/tests/evidence/**/*.mkv

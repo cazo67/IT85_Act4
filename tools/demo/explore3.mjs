@@ -1,0 +1,14 @@
+import { createRequire } from "node:module"; import { join } from "node:path"; import { writeFileSync } from "node:fs"; import { root, runDir } from "./lib/common.mjs";
+const { chromium } = createRequire(join(root, "source", "package.json"))("playwright-core");
+const b = await chromium.connectOverCDP("http://127.0.0.1:9241"); const page = b.contexts()[0].pages()[0];
+const snap = async (name, from = 18, to = 130) => { const t = (await page.locator("main").ariaSnapshot()).split("\n").slice(from, to).join("\n"); writeFileSync(join(runDir, "frames", `snap-${name}.txt`), t); };
+const nav = async (n) => { await page.getByRole("button", { name: n, exact: true }).click(); await page.waitForTimeout(1200); };
+await nav("Generate billing"); await snap("billing");
+await nav("Invoices"); await snap("invoices");
+await nav("Receive payment"); await snap("payment");
+await nav("Receivables"); await snap("receivables", 18, 160);
+await nav("Collection batches"); await snap("batches");
+await nav("Backup and recovery"); await snap("backup");
+await nav("Payment history"); await snap("history");
+await nav("Reports"); await snap("reports", 18, 100);
+await b.close();

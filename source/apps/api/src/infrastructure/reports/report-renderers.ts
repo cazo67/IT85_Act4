@@ -73,7 +73,7 @@ export function safeText(value: string): string { return /^[=+\-@]/.test(value) 
 function xlsxValue(value: ReportCell, type: ReportColumnType): string | number | Date {
   if (type === "money") return Number(BigInt(value)) / 100;
   if (type === "integer") return Number(value);
-  if (type === "date") return new Date(`${String(value)}T00:00:00.000Z`);
+  if (type === "date") return value === "" ? "" : new Date(`${String(value)}T00:00:00.000Z`);
   return safeText(String(value));
 }
 function display(value: ReportCell, type: ReportColumnType): string {

@@ -1,0 +1,22 @@
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
+import { Native, Recorder, Client } from "./lib/desktop.mjs";
+import { startCapture, hwndFor } from "./lib/capture.mjs";
+import { runDir, loadSecrets, sleep } from "./lib/common.mjs";
+
+const s = loadSecrets();
+const native = new Native(); const rec = new Recorder("try-login");
+const pid = Number(readFileSync(join(runDir, "runtime", "clientA.pid"), "utf8"));
+const hwnd = hwndFor(pid);
+await native.send("place", { hwnd }); await native.send("foreground", { hwnd }); await sleep(800);
+const A = await new Client({ name: "A", port: 9241, native, rec, role: "ADMINISTRATOR" }).attach();
+await A.calibrate();
+const cap = startCapture("try-login"); await sleep(1500);
+const page = A.page;
+await A.type(page.getByLabel("Username"), "demo.administrator", "username");
+await A.type(page.getByLabel("Password"), s.users["demo.administrator"].password, "password", { secret: true, lo: 90, hi: 200 });
+await A.click(page.getByRole("button", { name: /^Sign in$/ }), "sign in");
+await page.getByRole("heading", { name: /dashboard|overview/i }).first().waitFor({ timeout: 20000 }).catch(() => {});
+await A.hold(3000, "dashboard");
+const r = await cap.stop(); console.log("captured", r.ms, "ms", r.err.slice(0, 200));
+native.close(); process.exit(0);

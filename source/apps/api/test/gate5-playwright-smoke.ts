@@ -113,8 +113,31 @@ async function main() {
     await page.getByRole("button", { name: new RegExp(lastName) }).click();
     await page.getByLabel("Amount in PHP").fill("1.37");
     await page.getByRole("button", { name: "Preview allocation" }).click();
+    let firstCommandKey: string | undefined;
+    let responseLostAfterCommit = false;
+    let retryReusedCommandKey = false;
+    await page.route("**/api/v1/payments", async (route) => {
+      if (route.request().method() !== "POST") return route.continue();
+      const input = route.request().postDataJSON() as { commandKey: string };
+      if (!firstCommandKey) {
+        firstCommandKey = input.commandKey;
+        const committed = await route.fetch();
+        responseLostAfterCommit = committed.status() === 200;
+        await route.abort("failed");
+        return;
+      }
+      retryReusedCommandKey = input.commandKey === firstCommandKey;
+      await route.continue();
+    });
+    await page.getByRole("button", { name: "Confirm and issue receipt" }).click();
+    await page.getByText("If the response was lost, retry the same payment.", { exact: false }).waitFor();
+    if (!responseLostAfterCommit) throw new Error("The first Cash payment did not commit before its response was lost.");
+    const afterLostResponse = (await pool.query("select (select count(*)::int from payments where subscriber_id=$1 and status='POSTED') as payments, (select count(*)::int from receipts r join payments p on p.id=r.payment_id where p.subscriber_id=$1) as receipts", [subscriberId])).rows[0];
+    if (afterLostResponse?.payments !== 1 || afterLostResponse?.receipts !== 1) throw new Error("The lost-response payment did not persist exactly once.");
     await page.getByRole("button", { name: "Confirm and issue receipt" }).click();
     await page.getByText("BCIS OFFICIAL RECEIPT").waitFor();
+    await page.unroute("**/api/v1/payments");
+    if (!retryReusedCommandKey) throw new Error("The desktop retry used a new financial command key.");
 
     const financial = (await pool.query("select (select count(*)::int from service_accounts where subscriber_id=$1) as services, (select count(*)::int from invoices where subscriber_id=$1) as invoices, (select count(*)::int from payments where subscriber_id=$1 and status='POSTED') as payments, (select count(*)::int from receipts r join payments p on p.id=r.payment_id where p.subscriber_id=$1) as receipts, (select count(*)::int from payment_allocations a join payments p on p.id=a.payment_id where p.subscriber_id=$1 and not a.is_reversed) as allocations, (select coalesce(sum(total_centavos-paid_centavos),0)::text from invoices where subscriber_id=$1 and status<>'VOID') as outstanding, (select coalesce(sum(debit_centavos-credit_centavos),0)::text from ledger_entries where subscriber_id=$1) as ledger_net, (select coalesce(sum(paid_centavos),0)::text from invoices where subscriber_id=$1) as invoice_paid, (select count(*)::int from audit_logs where entity_id in (select id::text from payments where subscriber_id=$1) and action='payment.post') as payment_audits", [subscriberId])).rows[0] as { services: number; invoices: number; payments: number; receipts: number; allocations: number; outstanding: string; ledger_net: string; invoice_paid: string; payment_audits: number } | undefined;
     if (!financial || financial.services !== 1 || financial.invoices !== 1 || financial.payments !== 1 || financial.receipts !== 1 || financial.allocations !== 1 || financial.invoice_paid !== "137" || financial.outstanding !== financial.ledger_net || financial.payment_audits !== 1) throw new Error("The Playwright Cash workflow did not reconcile across invoice, payment, allocation, receipt, ledger and audit.");
@@ -143,7 +166,7 @@ async function main() {
     await page.getByRole("button", { name: "Sign out" }).click();
     await page.locator("#username").waitFor();
     passed = true;
-    console.info(JSON.stringify({ playwrightElectronSmoke: true, ownerLogin: true, dashboard: true, navigation: true, apiUnavailableAndRecovery: true, cashUiWorkflow: true, invoicePaymentLedgerReconciled: true, reportReconciled: true, paymentAuditRows: financial.payment_audits, rendererRestartPersistence: true, signOut: true, installedClient: "not verified" }));
+    console.info(JSON.stringify({ playwrightElectronSmoke: true, ownerLogin: true, dashboard: true, navigation: true, apiUnavailableAndRecovery: true, cashUiWorkflow: true, lostPaymentResponseRetriedOnce: true, invoicePaymentLedgerReconciled: true, reportReconciled: true, paymentAuditRows: financial.payment_audits, rendererRestartPersistence: true, signOut: true, installedClient: "not verified" }));
   } finally {
     if (traceStarted && context) {
       if (passed) await context.tracing.stop();

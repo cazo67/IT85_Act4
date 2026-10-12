@@ -57,3 +57,19 @@ corepack pnpm --dir source --filter @bcis/api exec tsx test/gate5-playwright-smo
 ```
 
 The script requires a ready API and an actual Electron renderer at `localhost:5173`/CDP `9236`. It tests unavailable login, Owner login, dashboard and navigation, API failure/recovery, UI subscriber/service creation, billing finalization, partial Cash payment, receipt, persisted invoice/allocation/ledger, report and audit records, renderer reload and sign-out. It creates synthetic `bcis_test` records only, deactivates its synthetic actor, and writes a Playwright trace under ignored `tests/screenshots` **only on failure**. Stop the isolated API and Electron processes after the run. This is unpackaged desktop evidence; installed-client acceptance remains separate.
+
+## Gate 6 report-catalog check
+
+With `BCIS_TEST_DATABASE_URL` set to the guarded `127.0.0.1:5433/bcis_test` URL constructed above, run:
+
+```powershell
+corepack pnpm --dir source --filter @bcis/api exec vitest run test/gate6-report-catalog-postgres.test.ts --maxWorkers=1 --isolate=false --testTimeout=120000 --hookTimeout=15000
+```
+
+This checks server-side preview and in-memory PDF/XLSX rendering for all 15 report families. It does not replace independent financial reconciliation, installed Save/Open, or physical printing checks.
+
+## Gate 6 user-operated packaged smoke
+
+Run this only when the user is ready at the same Windows PC. First point the API process explicitly at guarded `bcis_test`, bind it to `127.0.0.1:4100`, and allow packaged `Origin: null`; verify `/api/v1/health/ready` returns 200. The current isolated candidate is under `release/gate6-candidate-2026-10-04/win-unpacked/` and was built for `http://127.0.0.1:4100`. Do not start it against normal `bcis`, which has not received the reviewed newer migrations.
+
+With `BCIS_TEST_DATABASE_URL` set to the exact guarded test URL, `corepack pnpm --dir source --filter @bcis/api exec tsx test/gate6-manual-actor.ts create` creates a temporary Owner and copies its generated password to the local Windows clipboard without printing it. Give the user the printed username and ask them to paste the password in the app; never request the password in chat. After the test, use the same guarded environment with `... gate6-manual-actor.ts revoke <printed username>` to deactivate it and revoke sessions, then stop the test API. Record observed startup/login, Online/Ready, role navigation, Save PDF/XLSX and print outcomes separately; absence of a launched process is not a passing or failing application result.
